@@ -8,15 +8,17 @@ from pymeasure.instruments.agilent import AgilentE4980
 from pymeasure.instruments.razorbill import razorbillRP100
 import pyvisa
 
-# visa
-rm = pyvisa.ResourceManager()
-resources = rm.list_resources()
-resources
+if __name__=='__main__':
 
-inst1 = rm.open_resource(resources[1])
+    # visa
+    rm = pyvisa.ResourceManager()
+    resources = rm.list_resources()
+    resources
 
-# setup connection with both instruments
-lcr_address = ''
-ps_address = ''
-lcr = AgilentE4980(lcr_address)
-ps = razorbillRP100(ps_address)
+    inst1 = rm.open_resource(resources[1])
+
+    # setup connection with both instruments
+    lcr_address = ''
+    ps_address = ''
+    lcr = AgilentE4980(lcr_address)
+    ps = razorbillRP100(ps_address)
