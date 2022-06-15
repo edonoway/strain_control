@@ -1,8 +1,22 @@
-"""
+'''
 Main file for controlling Razorbill CS130 strain cell.
 
 Coordinates sensing capacitor from Keysight LCR meter and setting output voltage to piezzo stacks into a PID loop. For convenience, may want to set up as a class.
-"""
+
+NOTE: The proper design for this PID loop is still not clear. The goal is to start a process that will robustly maintain a given strain, and yet where strain can easily be changed within a parent process.
+
+I think actually the best way to design this is as is already implemented for other intruments, such as the temperature controller. There, the PID loop is run as a process within the Lakeshore controller - ie, in a process external to the control process. There is some variable that gets set by the control process to change setpoint, which is then read by the PID process. I wonder if I can do something similar, where this PID process looks somewhere for a setpoint variable and then tries to maintain that.
+
+The other requirement is to be able to easily record the meaured strain.
+
+I also wonder if the right way to go is first slowly ramp up to approximate correct voltage as given by dl = 0.05(um/V)*V to get the desired strain, and then once voltage is achieved, start PID control about that voltage?
+
+SOME IMPORTANT SAFETY NOTES:
+- include proper voltage limits for the power supply (ideally as a function of temperature with some backups safety to ensure it defaults to lowest limits)
+- wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
+
+
+'''
 
 from pymeasure.instruments.agilent import AgilentE4980
 from pymeasure.instruments.razorbill import razorbillRP100
@@ -13,22 +27,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 
+global MAX_VOLTAGE
+global MIN_VOLTAGE
+MAX_VOLTAGE = 119 # V
+MIN_VOLTAGE = -19 # V
+
+def set_strain(lcr, ps, pid, setpoint, strain):
+    '''
+    Handles setting new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with the PID loop. TBD if I will actually use this, but the idea is to reduce the possibility of sudden jumps in output voltage (perhaps the better way to do this is by tuning the PID).
+    '''
+
+    return 1
 
 def start_strain_pid(lcr, ps, pid, setpoint, strain):
     '''
     Start PID loop to control strain.
-
-    NOTE: The proper design for this PID loop is still not clear. The goal is to start a process that will robustly maintain a given strain, and yet where strain can easily be changed within a parent process.
-
-    I think actually the best way to design this is as is already implemented for other intruments, such as the temperature controller. There, the PID loop is run as a process within the Lakeshore controller - ie, in a process external to the control process. There is some variable that gets set by the control process to change setpoint, which is then read by the PID process. I wonder if I can do something similar, where this PID process looks somewhere for a setpoint variable and then tries to maintain that.
-
-    The other requirement is to be able to easily record the meaured strain.
-
-    I also wonder if the right way to go is first slowly ramp up to approximate correct voltage as given by dl = 0.05(um/V)*V to get the desired strain, and then once voltage is achieved, start PID control about that voltage? 
-
-    SOME IMPORTANT SAFETY NOTES:
-    - include proper voltage limits for the power supply (ideally as a function of temperature with some backups safety to ensure it defaults to lowest limits)
-    - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
     Args:
         - lcr:  pymeasure object for LCR meter
@@ -45,7 +58,6 @@ def start_strain_pid(lcr, ps, pid, setpoint, strain):
 
         # update setpoint
         pid.setpoint = setpoint.locked_read()
-
         # compute new output given current strain
         new_voltage = pid(strain.locked_read())
         # set the new output and get current value
@@ -62,11 +74,16 @@ def strain_update(lcr, ps, voltage, strain):
         - strain:     LockedVar
     '''
 
+    if voltage > MAX_VOLTAGE:
+        voltage = MAX_VOLTAGE
+        #print('Warning: maximum voltage exceeded, limiting output to '+str(voltage)+' V.')
+    elif voltage < MIN_VOLTAGE:
+        voltage = MIN_VOLTAGE
+        #print('Warning: minimum voltage exceeded, limiting output to '+str(voltage)+' V.')
     # set voltages
     ps.voltage_1 = voltage
     ps.voltage_2 = voltage
     ps.set_voltage(voltage, lcr) # for testing purposes
-
     strain.locked_update(get_strain(lcr))
 
 def initialize_instruments(lcr, ps):
@@ -186,7 +203,7 @@ if __name__=='__main__':
     # variables to hold setpoint and strain value
     strain0 = get_strain(lcr)
     strain = LockedVar(strain0)
-    setpoint = LockedVar(.1)
+    setpoint = LockedVar(.075)
 
     print("initial strain: "+str(get_strain(lcr)))
 
