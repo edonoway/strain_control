@@ -164,7 +164,7 @@ def get_strain(lcr, l0=68.68):
     cap = impedance[0]
     dl = capacitance_to_dl(cap)
     l = l0+dl
-    strain = dl/l # change to l0 then retune
+    strain = dl/l0
     return strain, cap, dl, l
 
 def capacitance_to_dl(capacitance):
@@ -336,7 +336,7 @@ if __name__=='__main__':
         # variables to hold setpoint and strain value
         strain0 = get_strain(lcr)[0]
         strain = LockedVar(strain0)
-        setpoint = LockedVar(.075)
+        setpoint = LockedVar(.1)
 
         print("initial strain: "+str(strain0))
 
@@ -348,7 +348,7 @@ if __name__=='__main__':
         print('capacitance = '+str(lcr.impedance[1]))
 
         # setup the PID loop
-        pid = PID(1500, 200, .1, setpoint=setpoint.locked_read())
+        pid = PID(1000, 100, .1, setpoint=setpoint.locked_read())
 
         # start PID control in a separate thread
         pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
