@@ -112,7 +112,6 @@ def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68):
     '''
 
     while True:
-
         # update setpoint
         pid.setpoint = setpoint.locked_read()
         # compute new output given current strain
@@ -186,7 +185,6 @@ def capacitance_to_dl(capacitance):
     response = 12e-3 # pF/um
     eps0 = 8.854e-6 # pF/um - vacuum permitivity
     cap_offset = 0.04 # pf - eventually should obtain this from a temperature calibration of "0" strain.
-
     # temperature calibration curve: d = eps*A/(C - offset) - x0
     dl = eps0*area/(capacitance - cap_offset) - l0 # um
     return dl
@@ -238,6 +236,7 @@ class SimulatedPS:
     simulation of Razorbill power supply for testing purposes. Includes method v_to_imp(), which is meant to simulate the piezo response (and hence capacitor reading) expected for a given output voltage, such that when a new voltage is set the SimulatedLCR object responds accordingly.
 
     '''
+
     def __init__(self, lcr):
         self.voltage_1 = 0
         self.voltage_2 = 0
@@ -291,7 +290,6 @@ class SimulatedPS:
         eps0 = 8.854e-6 # pF/um - vacuum permitivity
         cap = eps0*area/(dl+l0) + 0.04
         return [cap, cap]
-
 
 if __name__=='__main__':
     '''
@@ -353,7 +351,6 @@ if __name__=='__main__':
         # start PID control in a separate thread
         pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
         pid_loop.start()
-
 
         # setup plots
         plt.ion()
