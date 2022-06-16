@@ -336,7 +336,7 @@ if __name__=='__main__':
         # variables to hold setpoint and strain value
         strain0 = get_strain(lcr)[0]
         strain = LockedVar(strain0)
-        setpoint = LockedVar(.1)
+        setpoint = LockedVar(.075)
 
         print("initial strain: "+str(strain0))
 
