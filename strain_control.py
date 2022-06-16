@@ -165,7 +165,7 @@ def get_strain(lcr, l0=68.68):
     dl = capacitance_to_dl(cap)
     l = l0+dl
     strain = dl/l0
-    return strain, cap, l, dl
+    return strain, cap, dl, l
 
 def capacitance_to_dl(capacitance):
     '''
