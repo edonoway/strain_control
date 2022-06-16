@@ -240,6 +240,7 @@ class SimulatedPS:
     simulation of Razorbill power supply for testing purposes. Includes method v_to_imp(), which is meant to simulate the piezo response (and hence capacitor reading) expected for a given output voltage, such that when a new voltage is set the SimulatedLCR object responds accordingly.
 
     '''
+
     def __init__(self, lcr):
         self.voltage_1 = 0
         self.voltage_2 = 0
@@ -354,7 +355,6 @@ if __name__=='__main__':
         # start PID control in a separate thread
         pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
         pid_loop.start()
-
 
         # setup plots
         plt.ion()
