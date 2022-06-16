@@ -63,11 +63,13 @@ def start_strain_control(lcr, ps, pid, setpoint, strain):
 
 def initialize_instruments(lcr, ps):
     '''
-    Sets initial setting and paramters for both LCR meter and power supply
+    Sets initial setting and paramters for both LCR meter and power supply.
 
     args:
-        - lcr: pymeasure instrument for LCR meter
-        - ps:  pymeasure instrument for RP100 power supply
+        - lcr                   pymeasure LCR handle
+        - ps:                   pymeasure power supply handle
+
+    returns: None
     '''
 
     return 1
