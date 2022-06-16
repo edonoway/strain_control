@@ -114,7 +114,6 @@ def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68):
     '''
 
     while True:
-
         # update setpoint
         pid.setpoint = setpoint.locked_read()
         # compute new output given current strain
@@ -166,7 +165,7 @@ def get_strain(lcr, l0=68.68):
     dl = capacitance_to_dl(cap)
     l = l0+dl
     strain = dl/l0
-    return strain, l, dl
+    return strain, cap, l, dl
 
 def capacitance_to_dl(capacitance):
     '''
@@ -188,7 +187,6 @@ def capacitance_to_dl(capacitance):
     response = 12e-3 # pF/um
     eps0 = 8.854e-6 # pF/um - vacuum permitivity
     cap_offset = 0.04 # pf - eventually should obtain this from a temperature calibration of "0" strain.
-
     # temperature calibration curve: d = eps*A/(C - offset) - x0
     dl = eps0*area/(capacitance - cap_offset) - l0 # um
     return dl
@@ -350,7 +348,7 @@ if __name__=='__main__':
         print('capacitance = '+str(lcr.impedance[1]))
 
         # setup the PID loop
-        pid = PID(1500, 200, .1, setpoint=setpoint.locked_read())
+        pid = PID(1000, 100, .1, setpoint=setpoint.locked_read())
 
         # start PID control in a separate thread
         pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
