@@ -22,7 +22,8 @@ from pymeasure.instruments.agilent import AgilentE4980
 from pymeasure.instruments.razorbill import razorbillRP100
 import pyvisa
 from simple_pid import PID
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
+import threading
 import matplotlib.pyplot as plt
 import numpy as np
 import time
@@ -74,7 +75,7 @@ def initialize_instruments(lcr, ps):
 
     return 1
 
-def set_strain_rough(lcr, ps, strain_setpoint):
+def set_strain_rough(lcr, ps, strain_setpoint, sim=False):
     '''
     Ramp voltage on power supply to an approximately correct voltage, returning once that voltage has been achieved or the strain setpoint has been exceeded. This should be proceeded by PID control.
 
@@ -88,9 +89,11 @@ def set_strain_rough(lcr, ps, strain_setpoint):
     '''
 
     approx_voltage = strain_to_voltage(strain)
-    ps.voltage_1 = approx_voltage
-    ps.voltage_2 = approx_voltage
-    ps.set_voltage(approx_voltage)
+    if sim==True:
+        ps.set_voltage(approx_voltage)
+    else:
+        ps.voltage_1 = approx_voltage
+        ps.voltage_2 = approx_voltage
 
     loop_cond = True
     while loop_cond:
@@ -99,7 +102,7 @@ def set_strain_rough(lcr, ps, strain_setpoint):
         if get_strain(lcr) > strain_setpoint:
             loop_cond = False
 
-def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68):
+def start_pid(lcr, ps, pid, setpoint, strain, stopped, l0=68.68, sim=False):
     '''
     Start PID loop to control strain.
 
@@ -113,15 +116,16 @@ def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68):
     returns: None
     '''
 
-    while True:
+    current_thread = threading.current_thread()
+    while current_thread.stopped()==False:
         # update setpoint
         pid.setpoint = setpoint.locked_read()
         # compute new output given current strain
         new_voltage = pid(strain.locked_read())
         # set the new output and get current value
-        control_update(lcr, ps, new_voltage, strain, l0=l0)
+        control_update(lcr, ps, new_voltage, strain, l0, sim)
 
-def control_update(lcr, ps, voltage, strain, l0=68.68):
+def control_update(lcr, ps, voltage, strain, l0=68.68, sim=False):
     '''
     update PID output and get strain.
 
@@ -141,9 +145,11 @@ def control_update(lcr, ps, voltage, strain, l0=68.68):
         voltage = MIN_VOLTAGE
         #print('Warning: minimum voltage exceeded, limiting output to '+str(voltage)+' V.')
     # set voltages
-    ps.voltage_1 = voltage
-    ps.voltage_2 = voltage
-    ps.set_voltage(voltage) # for testing purposes
+    if sim==True:
+        ps.set_voltage(voltage)
+    else:
+        ps.voltage_1 = voltage
+        ps.voltage_2 = voltage
     strain.locked_update(get_strain(lcr, l0=l0)[0])
 
 def get_strain(lcr, l0=68.68):
@@ -213,16 +219,32 @@ class LockedVar:
     '''
 
     def __init__(self, val):
-        self.__value = val
-        self.__lock = Lock()
+        self._value = val
+        self._lock = Lock()
 
     def locked_read(self):
-        with self.__lock:
-            return self.__value
+        with self._lock:
+            return self._value
 
     def locked_update(self, val):
-        with self.__lock:
-            self.__value = val
+        with self._lock:
+            self._value = val
+
+class StoppableThread(Thread):
+    '''
+    Thread class with a stop() method. The thread itself has to check
+    regularly for the stopped() condition.
+    '''
+
+    def __init__(self,  *args, **kwargs):
+        super(StoppableThread, self).__init__(*args, **kwargs)
+        self._stop_event = Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def stopped(self):
+        return self._stop_event.is_set()
 
 class SimulatedLCR:
     '''
@@ -240,48 +262,48 @@ class SimulatedPS:
     '''
 
     def __init__(self, lcr):
-        self.voltage_1 = 0
-        self.voltage_2 = 0
-        self.slew_rate = 10 # V/s
+        self.voltage_1 = LockedVar(0)
+        self.voltage_2 = LockedVar(0)
+        self.slew_rate = LockedVar(10) # V/s
         self.tol = 0.01 # V
         self.lcr = lcr
-        self.voltage_setter = Thread(target=self.set_new_voltage, args=(self.voltage_1,))
+        self.vmax = 120 # V
+        self.vim = -20 # V
+        self.voltage_setter = StoppableThread(target=self.set_new_voltage, args=(self.voltage_1.locked_read(),))
 
     def set_voltage(self, v):
+        ''' use this for immediate update (no ramping)
         self.voltage_1 = v
         self.voltage_2 = v
         self.lcr.impedance = self.v_to_imp(v)
         '''
         if self.voltage_setter.is_alive():
-            #print('closing thread...')
-            self.voltage_setter.join()
-            #print('thread closed')
-        #print('starting thread')
-        self.voltage_setter = Thread(target=self.set_new_voltage, args=(v,))
+            self.voltage_setter.stop()
+        self.voltage_setter = StoppableThread(target=self.set_new_voltage, args=(v,))
         self.voltage_setter.start()
-        #print('thread started')
-        '''
 
     def set_new_voltage(self, v): # incorporates ramp rate
         t0 = time.time()
         sign = 1
-        if self.voltage_1 > v:
+        v1 = self.voltage_1.locked_read()
+        if v1 > v:
             sign = -1
-        while self.voltage_1 < (v-self.tol) or self.voltage_1 > (v+self.tol):
+        while v1 < (v-self.tol) or v1 > (v+self.tol):
+            current_thread = threading.current_thread()
+            if current_thread.stopped()==True:
+                break
             t = time.time()
             dt = t-t0
-            dv = sign*self.slew_rate*dt
+            dv = sign*self.slew_rate.locked_read()*dt
             # only accept dv if it gets you closer to the setpoint
-            if abs(self.voltage_1 + dv) > abs(v):
-                dv = v - self.voltage_1
-            v_new = self.voltage_1 + dv
-            self.voltage_1 = v_new
-            self.voltage_2 = v_new
+            if abs(v1 + dv) > abs(v):
+                dv = v - v1
+            v_new = v1 + dv
+            v1 = v_new
+            self.voltage_1.locked_update(v_new)
+            self.voltage_2.locked_update(v_new)
             self.lcr.impedance = self.v_to_imp(v_new)
             t0 = t
-
-    def stop_voltage(self):
-        self.voltage_setter.join()
 
     def v_to_imp(self, v):
         # 0.05 um/V (assuming linear relation between dl and v)
@@ -319,24 +341,23 @@ if __name__=='__main__':
     if 1==0:
 
         ps.lcr = lcr
-        ps.voltage_1 = 100
-        ps.voltage_2 = 100
         ps.voltage_setter.start()
         ps.set_voltage(100)
         s = -1
         for i in range(100):
-            #if i%20 == 0:
-            #    print(i)
-            #    ps.set_voltage(s*100, lcr)
-            #    s = -s
+            if i%10 == 0 and i!=0:
+                print('switching direction')
+                ps.set_voltage(s*100)
+                s = -s
             time.sleep(0.5)
-            print(ps.voltage_1)
+            print(ps.voltage_1.locked_read())
 
     if 1==1:
         # variables to hold setpoint and strain value
         strain0 = get_strain(lcr)[0]
         strain = LockedVar(strain0)
         setpoint = LockedVar(.075)
+        stopped = LockedVar(False)
 
         print("initial strain: "+str(strain0))
 
@@ -344,47 +365,57 @@ if __name__=='__main__':
         print('\n')
         print('strain = '+str(new_strain))
         print('setpoint = '+str(setpoint.locked_read()))
-        print('voltage out = '+str(ps.voltage_1))
+        print('voltage out = '+str(ps.voltage_1.locked_read()))
         print('capacitance = '+str(lcr.impedance[1]))
 
         # setup the PID loop
         pid = PID(1000, 100, .1, setpoint=setpoint.locked_read())
 
         # start PID control in a separate thread
-        pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
+        pid_loop = StoppableThread(target=start_pid, args=(lcr, ps, pid, setpoint, strain, stopped), kwargs={'sim':True})
         pid_loop.start()
 
         # setup plots
-        plt.ion()
-        fig, ax = plt.subplots()
-        window = 1000
+        fig, ax = plt.subplots(1)
+        window = 10000
+        nstep = 20000
         ax.set_ylabel('strain')
         ax.set_xlabel('time')
 
-        time_vect = [i for i in range(window)]
+        time_vect = np.zeros(window)
         strain_vect = np.zeros(window)
         line, = ax.plot(time_vect, strain_vect)
 
         n = 0
-        while True:
+        j = 0
+        t0 = time.time()
+        while j < window:
             n = n + 1
-            i = n % window
+            i = n % nstep
+
 
             # ask user to change setpoint
-            time.sleep(0.5)
+            #time.sleep(0.5)
 
+            t = time.time() - t0
             new_strain = strain.locked_read()
-            print('\n')
-            print('strain = '+str(new_strain))
-            print('setpoint = '+str(setpoint.locked_read()))
-            print('voltage out = '+str(ps.voltage_1))
-            print('capacitance = '+str(lcr.impedance[1]))
+            #print('\n')
+            #print('strain = '+str(new_strain))
+            #print('setpoint = '+str(setpoint.locked_read()))
+            #print('voltage out = '+str(ps.voltage_1.locked_read()))
+            #print('capacitance = '+str(lcr.impedance[1]))
 
-            # update plot
-            strain_vect[i] = new_strain
-            line.set_ydata(strain_vect)
-            fig.canvas.draw()
-            fig.canvas.flush_events()
-            plt.show()
+            if i == 0:
+                # update plot
+                time_vect[j] = t
+                strain_vect[j] = new_strain
+                j = j + 1
 
+        pid_loop.stop()
         pid_loop.join()
+
+        ax.plot(time_vect, strain_vect, 'o', ms=0.5, color='orange')
+        ax.set_xlabel('time (s)')
+        ax.set_ylabel('strain (a.u.)')
+        plt.tight_layout()
+        plt.show()
