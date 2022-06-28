@@ -33,7 +33,7 @@ global MIN_VOLTAGE
 MAX_VOLTAGE = 119 # V
 MIN_VOLTAGE = -19 # V
 
-def start_strain_control(lcr, ps, pid, setpoint, strain):
+def set_strain(lcr, ps, pid, setpoint, strain):
     '''
     Handles setting new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with the PID loop. TBD if I will actually use this, but the idea is to reduce the possibility of sudden jumps in output voltage (perhaps the better way to do this is by tuning the PID).
 
@@ -51,7 +51,8 @@ def start_strain_control(lcr, ps, pid, setpoint, strain):
     set_strain_rough(lcr, ps, current_setpoint)
     pid_loop.start()
 
-    while True:
+    current_thread = threading.current_thread()
+    while current_thread.stopped()==False:
 
         new_setpoint = setpoint.locked_read()
         if new_setpoint != current_setpoint:
@@ -75,14 +76,14 @@ def initialize_instruments(lcr, ps):
 
     return 1
 
-def set_strain_rough(lcr, ps, strain_setpoint, sim=False):
+def set_strain_rough(lcr, ps, setpoint, sim=False):
     '''
     Ramp voltage on power supply to an approximately correct voltage, returning once that voltage has been achieved or the strain setpoint has been exceeded. This should be proceeded by PID control.
 
     args:
         - lcr                       pymeasure LCR handle
         - ps:                       pymeasure power supply handle
-        - strain_setpoint(float):   a value of strain to aim for
+        - setpoint(float):   a value of strain to aim for
 
     returns: None
 
@@ -99,10 +100,10 @@ def set_strain_rough(lcr, ps, strain_setpoint, sim=False):
     while loop_cond:
         if ps.voltage_1 > (approx_voltage - ps.tol) or ps.voltage_1 <(approx_voltage + ps.tol):
             loop_cond = False
-        if get_strain(lcr) > strain_setpoint:
+        if get_strain(lcr) > setpoint:
             loop_cond = False
 
-def start_pid(lcr, ps, pid, setpoint, strain, stopped, l0=68.68, sim=False):
+def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68, sim=False):
     '''
     Start PID loop to control strain.
 
