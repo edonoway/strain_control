@@ -16,6 +16,9 @@ SOME IMPORTANT SAFETY NOTES:
 - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
 
+Two issues: (1) getting PID to play with rough ramp, (2) robustly updating strain object rather than coupling it with writing.
+
+
 '''
 
 from pymeasure.instruments.agilent import AgilentE4980
@@ -27,41 +30,15 @@ import threading
 import matplotlib.pyplot as plt
 import numpy as np
 import time
+import sys
 
+#################################
+### LIMIT OUTPUT VOLTAGE HERE ###
+#################################
 global MAX_VOLTAGE
 global MIN_VOLTAGE
 MAX_VOLTAGE = 119 # V
 MIN_VOLTAGE = -19 # V
-
-def set_strain(lcr, ps, pid, setpoint, strain):
-    '''
-    Handles setting new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with the PID loop. TBD if I will actually use this, but the idea is to reduce the possibility of sudden jumps in output voltage (perhaps the better way to do this is by tuning the PID).
-
-    args:
-        - lcr                   pymeasure LCR handle
-        - ps:                   pymeasure power supply handle
-        - setpoint:             LockedVar for holding the setpoint
-        - strain:               LockedVar for holding the current strain
-
-    returns: None
-    '''
-
-    current_setpoint = setpoint.locked_read() # hold initial setpoint
-    pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
-    set_strain_rough(lcr, ps, current_setpoint)
-    pid_loop.start()
-
-    current_thread = threading.current_thread()
-    while current_thread.stopped()==False:
-
-        new_setpoint = setpoint.locked_read()
-        if new_setpoint != current_setpoint:
-            current_setpoint = new_setpoint
-            if pid_loop.is_alive():
-                    pid_loop.join()
-            pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, setpoint, strain))
-            set_strain_rough(lcr, ps, current_setpoint)
-            pid_loop.start()
 
 def initialize_instruments(lcr, ps):
     '''
@@ -76,9 +53,62 @@ def initialize_instruments(lcr, ps):
 
     return 1
 
-def set_strain_rough(lcr, ps, setpoint, sim=False):
+def start_strain_control(lcr, ps, pid, setpoint, strain, l0=68.68, sim=False):
     '''
-    Ramp voltage on power supply to an approximately correct voltage, returning once that voltage has been achieved or the strain setpoint has been exceeded. This should be proceeded by PID control.
+    Handles setting new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with a restricted PID loop.
+
+    args:
+        - lcr                   pymeasure LCR handle
+        - ps:                   pymeasure power supply handle
+        - setpoint:             LockedVar for holding the setpoint
+        - strain:               LockedVar for holding the current strain
+
+    returns: None
+    '''
+
+    current_setpoint = setpoint.locked_read() # hold initial setpoint
+    pid_loop = StoppableThread(target=start_pid, args=(lcr, ps, pid, setpoint, strain), kwargs={'l0':l0, 'sim':True})
+    print('setting rough voltage')
+    set_strain_rough(lcr, ps, setpoint, strain, l0, sim)
+    print('rough voltage achieve, starting PID')
+    pid_loop.start()
+
+    current_thread = threading.current_thread()
+    while current_thread.stopped()==False:
+        new_setpoint = setpoint.locked_read()
+        if new_setpoint != current_setpoint:
+            current_setpoint = new_setpoint
+            if pid_loop.is_alive():
+                    pid_loop.join()
+            pid_loop = Thread(target=start_pid, args=(lcr, ps, pid, current_setpoint, strain), kwargs={'l0':l0, 'sim':True})
+            set_strain_rough(lcr, ps, setpoint, strain, l0, sim)
+            pid_loop.start()
+    pid_loop.stop()
+
+def get_strain(lcr, l0=68.68):
+    '''
+    Querys LCR meter for current impedance measurement and uses calibration curve to return strain. Assumes that LCR measurement mode is set to one of the parallel modes, which is appropriate for measuring small capacitance (such as CPD)
+
+    args:
+        - lcr:                  pymeasure LCR handle
+        - l0(float):            initial gap between sample plates in um
+
+    returs:
+        - strain(float):        calculated strain
+        - l(float):             gap between sample plates in um
+        - dl(float):            l - l0
+    '''
+
+    impedance = lcr.impedance # or read impedance as posted by another process
+    cap = impedance[0]
+    dl = capacitance_to_dl(cap)
+    l = l0+dl
+    strain = dl/l0
+    return strain, cap, dl, l
+
+def set_strain_rough(lcr, ps, setpoint, strain, l0=68.68, sim=False):
+    '''
+    Ramp voltage on power supply to an approximately correct strain, returning once that strain has been achieved within tolerance. This can be proceeded by PID control.
 
     args:
         - lcr                       pymeasure LCR handle
@@ -89,19 +119,31 @@ def set_strain_rough(lcr, ps, setpoint, sim=False):
 
     '''
 
-    approx_voltage = strain_to_voltage(strain)
-    if sim==True:
-        ps.set_voltage(approx_voltage)
-    else:
-        ps.voltage_1 = approx_voltage
-        ps.voltage_2 = approx_voltage
+    setpoint_val = setpoint.locked_read()
+    strain_val = strain.locked_read()
+    start_voltage = strain_to_voltage(setpoint_val)
+    voltage_increment = 0.5
+    strain_tol=0.005
 
-    loop_cond = True
-    while loop_cond:
-        if ps.voltage_1 > (approx_voltage - ps.tol) or ps.voltage_1 <(approx_voltage + ps.tol):
-            loop_cond = False
-        if get_strain(lcr) > setpoint:
-            loop_cond = False
+    n=0
+    while abs(strain_val) <= abs(setpoint_val):
+        approx_voltage = start_voltage + n*voltage_increment
+        instrument_update(lcr, ps, approx_voltage, strain, l0, sim)
+
+        loop_cond = True
+        while loop_cond:
+            if sim==True:
+                v1 = ps.voltage_1.locked_read()
+                v2 = ps.voltage_2.locked_read()
+            else:
+                v1 = ps.voltage_1
+                v2 = ps.voltage_2
+            if v1 > (approx_voltage - ps.tol) or v1 < (approx_voltage + ps.tol):
+                loop_cond = False
+            strain_val = strain.locked_read()
+            if abs(strain_val) >= abs(setpoint_val):
+                loop_cond = False
+        n=n+1
 
 def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68, sim=False):
     '''
@@ -124,9 +166,9 @@ def start_pid(lcr, ps, pid, setpoint, strain, l0=68.68, sim=False):
         # compute new output given current strain
         new_voltage = pid(strain.locked_read())
         # set the new output and get current value
-        control_update(lcr, ps, new_voltage, strain, l0, sim)
+        instrument_update(lcr, ps, new_voltage, strain, l0, sim)
 
-def control_update(lcr, ps, voltage, strain, l0=68.68, sim=False):
+def instrument_update(lcr, ps, voltage, strain, l0=68.68, sim=False):
     '''
     update PID output and get strain.
 
@@ -152,27 +194,6 @@ def control_update(lcr, ps, voltage, strain, l0=68.68, sim=False):
         ps.voltage_1 = voltage
         ps.voltage_2 = voltage
     strain.locked_update(get_strain(lcr, l0=l0)[0])
-
-def get_strain(lcr, l0=68.68):
-    '''
-    Querys LCR meter for current impedance measurement and uses calibration curve to return strain. Assumes that LCR measurement mode is set to one of the parallel modes, which is appropriate for measuring small capacitance (such as CPD)
-
-    args:
-        - lcr:                  pymeasure LCR handle
-        - l0(float):            initial gap between sample plates in um
-
-    returs:
-        - strain(float):        calculated strain
-        - l(float):             gap between sample plates in um
-        - dl(float):            l - l0
-    '''
-
-    impedance = lcr.impedance # or read impedance as posted by another process
-    cap = impedance[0]
-    dl = capacitance_to_dl(cap)
-    l = l0+dl
-    strain = dl/l0
-    return strain, cap, dl, l
 
 def capacitance_to_dl(capacitance):
     '''
@@ -317,48 +338,39 @@ class SimulatedPS:
         return [cap, cap]
 
 if __name__=='__main__':
-    '''
-    This test program is meant to illustrate the usage of this package.
-    '''
-    '''
-    # visa
-    rm = pyvisa.ResourceManager()
-    resources = rm.list_resources()
-    resources
 
-    inst1 = rm.open_resource(resources[1])
+    # start test with command line argument '-test'
+    args = sys.argv
+    if args[1]=='-test':
+        '''
+        This test is meant to illustrate the usage of this package. Set SIM to True to simulate power supply and lcr meter for testing of code.
+        '''
 
-    # setup connection with both instruments and initialize
-    lcr_address = ''
-    ps_address = ''
-    lcr = AgilentE4980(lcr_address)
-    ps = razorbillRP100(ps_address)
-    initialize_instruments(lcr, ps)
-    '''
+        SIM=True
 
-    lcr = SimulatedLCR(0.808)
-    ps = SimulatedPS(lcr)
+        if SIM==True:
+            lcr = SimulatedLCR(0.808)
+            ps = SimulatedPS(lcr)
 
-    if 1==0:
+        else:
+            # visa
+            rm = pyvisa.ResourceManager()
+            resources = rm.list_resources()
+            resources
 
-        ps.lcr = lcr
-        ps.voltage_setter.start()
-        ps.set_voltage(100)
-        s = -1
-        for i in range(100):
-            if i%10 == 0 and i!=0:
-                print('switching direction')
-                ps.set_voltage(s*100)
-                s = -s
-            time.sleep(0.5)
-            print(ps.voltage_1.locked_read())
+            inst1 = rm.open_resource(resources[1])
 
-    if 1==1:
+            # setup connection with both instruments and initialize
+            lcr_address = ''
+            ps_address = ''
+            lcr = AgilentE4980(lcr_address)
+            ps = razorbillRP100(ps_address)
+            initialize_instruments(lcr, ps)
+
         # variables to hold setpoint and strain value
         strain0 = get_strain(lcr)[0]
         strain = LockedVar(strain0)
         setpoint = LockedVar(.075)
-        stopped = LockedVar(False)
 
         print("initial strain: "+str(strain0))
 
@@ -373,19 +385,32 @@ if __name__=='__main__':
         pid = PID(1000, 100, .1, setpoint=setpoint.locked_read())
 
         # start PID control in a separate thread
-        pid_loop = StoppableThread(target=start_pid, args=(lcr, ps, pid, setpoint, strain, stopped), kwargs={'sim':True})
+        #pid_loop = StoppableThread(target=start_pid, args=(lcr, ps, pid, setpoint, strain), kwargs={'sim':True})
+        pid_loop = StoppableThread(target=start_strain_control, args=(lcr, ps, pid, setpoint, strain), kwargs={'sim':True})
         pid_loop.start()
 
         # setup plots
-        fig, ax = plt.subplots(1)
+        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         window = 10000
-        nstep = 20000
-        ax.set_ylabel('strain')
-        ax.set_xlabel('time')
+        nstep = 2000
+        ax11.set_ylabel('strain (a.u.)')
+        ax11.set_xlabel('time (s)')
+        ax12.set_ylabel('voltage 1 (V)')
+        ax12.set_xlabel('time (s)')
+        ax21.set_ylabel('voltage 2 (V)')
+        ax21.set_xlabel('time (s)')
+        ax22.set_ylabel('capacitance (pF)')
+        ax22.set_xlabel('time (s)')
 
         time_vect = np.zeros(window)
         strain_vect = np.zeros(window)
-        line, = ax.plot(time_vect, strain_vect)
+        v1_vect = np.zeros(window)
+        v2_vect = np.zeros(window)
+        cap_vect = np.zeros(window)
+        line11, = ax11.plot(time_vect, strain_vect)
+        line12, = ax12.plot(time_vect, v1_vect)
+        line21, = ax21.plot(time_vect, v2_vect)
+        line22, = ax22.plot(time_vect, cap_vect)
 
         n = 0
         j = 0
@@ -394,29 +419,30 @@ if __name__=='__main__':
             n = n + 1
             i = n % nstep
 
-
-            # ask user to change setpoint
-            #time.sleep(0.5)
-
             t = time.time() - t0
             new_strain = strain.locked_read()
-            #print('\n')
-            #print('strain = '+str(new_strain))
-            #print('setpoint = '+str(setpoint.locked_read()))
-            #print('voltage out = '+str(ps.voltage_1.locked_read()))
-            #print('capacitance = '+str(lcr.impedance[1]))
+            new_v1 = ps.voltage_1.locked_read()
+            new_v2 = ps.voltage_2.locked_read()
+            new_cap = lcr.impedance[1]
 
             if i == 0:
                 # update plot
                 time_vect[j] = t
                 strain_vect[j] = new_strain
+                v1_vect[j] = new_v1
+                v2_vect[j] = new_v2
+                cap_vect[j] = new_cap
                 j = j + 1
 
         pid_loop.stop()
         pid_loop.join()
 
-        ax.plot(time_vect, strain_vect, 'o', ms=0.5, color='orange')
-        ax.set_xlabel('time (s)')
-        ax.set_ylabel('strain (a.u.)')
+        ax11.plot(time_vect, strain_vect, 'o', ms=0.5, color='orange')
+        ax12.plot(time_vect, v1_vect, 'o', ms=0.5, color='blue')
+        ax21.plot(time_vect, v2_vect, 'o', ms=0.5, color='red')
+        ax22.plot(time_vect, cap_vect, 'o', ms=0.5, color='green')
         plt.tight_layout()
         plt.show()
+
+    else:
+        print('main loop')
