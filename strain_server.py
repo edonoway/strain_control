@@ -8,15 +8,18 @@ SOME IMPORTANT SAFETY NOTES:
 - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
 To Do:
-- fix rough ramp -> PID transition
-- come up with good way to closer server safely, setting voltages to 0 slowly, etc.
-- how will we tell the server what the temperature is? I suppose it might be able to connect to the Lakeshore controller and get the tempreature that way?
-- impelement safe socket communications?
-- generalized control loop with various options
-- expand gui to allow for control independent of server, show status, etc.
-- PID loop tuning (preferably from the GUI)
-- add documentation.
-- reconcile simulated and physical voltage read calls.
+(1) add several control loop modes (PID, PID+rough, only rough) and seamless transition between the modes
+(2) read temperature on lakeshore
+(3) expand GUI to be able to control, display PID params, etc.
+(4) add documentation
+(5) close server safely and maintain system state permanence
+(6) fix PID and how it interacts with rough ramp
+(7) add some feedback control to rough ramp, or an option to do so
+(8) add in helpful print statements to inform user on status of server and it's communication status
+(9) reconcile simulated and physical voltage read calls
+(10) safer socket communication, if possible, though so far it seems to be working okay.
+(11) fix axes scaling on plots
+(12) strain depends on initial separation and length of sample. Find some good way to get this initialized.
 
 '''
 
@@ -92,7 +95,7 @@ class StrainServer:
         self.cap = LockedVar(cap)
         self.imaginary_impedance = LockedVar(imaginary_impedance)
         self.dl = LockedVar(dl)
-        v1, v2 = self.ps_read()
+        v1, v2 = self.get_voltage(1), self.get_voltage(2)
         self.voltage_1 = LockedVar(v1)
         self.voltage_2 = LockedVar(v2)
         self.pid = PID(P, I, D, setpoint=self.setpoint.locked_read())
@@ -139,7 +142,8 @@ class StrainServer:
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
             strain, cap, imaginary_impedance, dl, _ = self.get_strain()
-            v1, v2 = self.ps_read()
+            v1 = self.get_voltage(1)
+            v2 = self.get_voltage(2)
             self.strain.locked_update(strain)
             self.cap.locked_update(cap)
             self.imaginary_impedance.locked_update(imaginary_impedance)
@@ -186,14 +190,15 @@ class StrainServer:
             n = n + 1
             i = n % nstep
 
-            t = time.time() - t0
-            new_strain = self.strain.locked_read()
-            new_v1 = self.voltage_1.locked_read()
-            #new_v2 = self.voltage_2.locked_read()
-            new_v2 = self.setpoint.locked_read()
-            new_cap = self.cap.locked_read()
-
             if i == 0:
+
+                t = time.time() - t0
+                new_strain = self.strain.locked_read()
+                new_v1 = self.voltage_1.locked_read()
+                new_v2 = self.voltage_2.locked_read()
+                new_cap = self.cap.locked_read()
+                new_sp = self.setpoint.locked_read()
+
                 # update plot
                 time_vect[j] = t
                 strain_vect[j] = new_strain
@@ -202,25 +207,26 @@ class StrainServer:
                 cap_vect[j] = new_cap
                 j = (j + 1) % window
 
-            line11.set_xdata(time_vect)
-            line11.set_ydata(strain_vect)
-            line12.set_xdata(time_vect)
-            line12.set_ydata(v1_vect)
-            line21.set_xdata(time_vect)
-            line21.set_ydata(v2_vect)
-            line22.set_xdata(time_vect)
-            line22.set_ydata(cap_vect)
-            ax11.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax12.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax21.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax22.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax11.set_ylim(np.min(strain_vect),np.max(strain_vect)*1.2)
-            ax12.set_ylim(np.min(v1_vect),np.max(v1_vect)*1.2)
-            ax21.set_ylim(np.min(v2_vect),np.max(v2_vect)*1.2)
-            ax22.set_ylim(np.min(cap_vect),np.max(cap_vect)*1.2)
-            plt.pause(0.05)
-            fig.canvas.draw()
-            fig.canvas.flush_events()
+                line11.set_xdata(time_vect)
+                line11.set_ydata(strain_vect)
+                line12.set_xdata(time_vect)
+                line12.set_ydata(v1_vect)
+                line21.set_xdata(time_vect)
+                line21.set_ydata(v2_vect)
+                line22.set_xdata(time_vect)
+                line22.set_ydata(cap_vect)
+                ax11.set_xlim(np.min(time_vect), np.max(time_vect))
+                ax12.set_xlim(np.min(time_vect), np.max(time_vect))
+                ax21.set_xlim(np.min(time_vect), np.max(time_vect))
+                ax22.set_xlim(np.min(time_vect), np.max(time_vect))
+                ax11.set_ylim(np.min(strain_vect),np.max(strain_vect)*1.2)
+                ax12.set_ylim(np.min(v1_vect),np.max(v1_vect)*1.2)
+                ax21.set_ylim(np.min(v2_vect),np.max(v2_vect)*1.2)
+                ax22.set_ylim(np.min(cap_vect),np.max(cap_vect)*1.2)
+                fig.suptitle(f'Setpoint: {new_sp}')
+                plt.pause(0.05)
+                fig.canvas.draw()
+                fig.canvas.flush_events()
 
     def start_comms(self):
         '''
@@ -283,7 +289,7 @@ class StrainServer:
 
             loop_cond = True
             while loop_cond:
-                v1, v2 = self.ps_read()
+                v1, v2 = self.get_voltage(1), self.get_voltage(2)
                 if v1 > (approx_voltage - ps.tol) or v1 < (approx_voltage + ps.tol):
                     loop_cond = False
                 strain_val = self.strain.locked_read()
@@ -326,31 +332,46 @@ class StrainServer:
 
     def ps_write(self, voltage):
         '''
-        helper function to update power supply voltage within proper limits.
+        update both channels of power supply to new voltage. change in future to coordinate the voltages in the best way (ie, not just same voltage on each channel, maybe we just pick both?) - really, I think this function may eventually use some other data such as direction of applied voltage or setpoint-strain to determine which channel should be energized corresponding to compression or tension.
+        '''
+        self.set_voltage(1, voltage)
+        #self.set_voltage(2, voltage)
+
+    def set_voltage(self, channel, voltage):
+        '''
+        update power supply voltage within proper limits.
 
         args:
+            - channel(int):         channel on ps to set, must be 1 or 2
             - voltage(float):       voltage to set on power supply.
 
         returns: None
 
         '''
+        try:
+            if not (channel==1 or channel==2):
+                raise ValueError('channel must be int 1 or 2.')
 
-        # limit max/min voltage
-        if voltage > MAX_VOLTAGE:
-            voltage = MAX_VOLTAGE
-        elif voltage < MIN_VOLTAGE:
-            voltage = MIN_VOLTAGE
+            # limit max/min voltage
+            if voltage > MAX_VOLTAGE:
+                voltage = MAX_VOLTAGE
+            elif voltage < MIN_VOLTAGE:
+                voltage = MIN_VOLTAGE
 
-        # set voltages
-        if self.sim==True:
-            self.ps.set_voltage(voltage)
-        else:
-            self.ps.voltage_1 = voltage
-            self.ps.voltage_2 = voltage
+            # set voltages
+            if self.sim==True:
+                self.ps.set_voltage(channel, voltage)
+            else:
+                if channel==1:
+                    self.ps.voltage_1 = voltage
+                elif channel==2:
+                    self.ps.voltage_2 = voltage
+        except:
+            print('Error: invaid voltage channel, please choose 1 or 2.')
 
-    def ps_read(self):
+    def get_voltage(self, channel):
         '''
-        returns voltage 1 and voltage 2 from power supply.
+        returns voltage 1 or voltage 2 from power supply.
 
         args: None
 
@@ -359,14 +380,23 @@ class StrainServer:
             - v2(float)s
 
         '''
+        try:
+            if not (channel==1 or channel==2):
+                raise ValueError('channel must be int 1 or 2.')
 
-        if self.sim==True:
-            v1 = self.ps.voltage_1.locked_read()
-            v2 = self.ps.voltage_2.locked_read()
-        else:
-            v1 = self.ps.voltage_1
-            v2 = self.ps.voltage_2
-        return v1, v2
+            if self.sim==True:
+                if channel==1:
+                    v = self.ps.voltage_1.locked_read()
+                elif channel==2:
+                    v = self.ps.voltage_2.locked_read()
+            else:
+                if channel==1:
+                    v = self.ps.voltage_1
+                elif channel==2:
+                    v = self.ps.voltage_2
+            return v
+        except:
+            print('Error: invaid voltage channel, please choose 1 or 2.')
 
     def get_strain(self):
         '''
@@ -448,20 +478,18 @@ class StrainServer:
             response = '1'
         elif message == 'STR:?':
             response = str(self.strain.locked_read())
-        elif re.match(r'STR:[0-9]+[\.]?[0-9]*', message):
-            setpoint = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
+        elif re.match(r'STR:-?[0-9]+[\.]?[0-9]*', message):
+            setpoint = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[0])
             self.setpoint.locked_update(setpoint)
             response = '1'
         elif re.match(r'VOL[1-2]:\?', message):
             channel = int(re.search(r'[1-2]', message)[0])
-            if channel==1:
-                response = str(self.ps.voltage_1)
-            elif channel==2:
-                response = str(self.ps.voltage_2)
-        elif re.match(r'VOL[1-2]:[0-9]+[\.]?[0-9]*', message):
+            v = self.get_voltage(channel)
+            response = str(v)
+        elif re.match(r'VOL[1-2]:-?[0-9]+[\.]?[0-9]*', message):
             channel = int(re.search(r'[1-2]', message)[0])
-            voltage = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[1])
-            self.ps_write(voltage) # change ps_write to specify channel as well.
+            voltage = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[1])
+            self.set_voltage(channel, voltage) # change ps_write to specify channel as well.
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
