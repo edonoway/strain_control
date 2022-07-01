@@ -1,27 +1,22 @@
 '''
-Main file for controlling Razorbill CS130 strain cell.
+Starts strain control server application, which coordiantes Keysight LCR meter and Razrbill RP100 power supply to control for strain on the Razorbill CSX130 strain cell.
 
-Coordinates sensing capacitor from Keysight LCR meter and setting output voltage to piezzo stacks into a PID loop. For convenience, may want to set up as a class.
-
-NOTE: The proper design for this PID loop is still not clear. The goal is to start a process that will robustly maintain a given strain, and yet where strain can easily be changed within a parent process.
-
-I think actually the best way to design this is as is already implemented for other intruments, such as the temperature controller. There, the PID loop is run as a process within the Lakeshore controller - ie, in a process external to the control process. There is some variable that gets set by the control process to change setpoint, which is then read by the PID process. I wonder if I can do something similar, where this PID process looks somewhere for a setpoint variable and then tries to maintain that.
-
-The other requirement is to be able to easily record the meaured strain.
-
-I also wonder if the right way to go is first slowly ramp up to approximate correct voltage as given by dl = 0.05(um/V)*V to get the desired strain, and then once voltage is achieved, start PID control about that voltage?
+The server operates over various threads: (1) a main GUI thread for displaying and interacting with instruments. (2) a control loop which include options for setting power supply output voltage to achieve a desired strain and PID control. (3) a monitoring loop for reading and logging instrument values. (4) a communications loop for recieving and responding to commands from the strain client via python's implementation of socket programming.
 
 SOME IMPORTANT SAFETY NOTES:
 - include proper voltage limits for the power supply (ideally as a function of temperature with some backups safety to ensure it defaults to lowest limits)
 - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
-
-Two issues: (1) getting PID to play with rough ramp, (2) robustly updating strain object rather than coupling it with writing.
-
 To Do:
+- fix rough ramp -> PID transition
 - come up with good way to closer server safely, setting voltages to 0 slowly, etc.
-- implement server functions
-
+- how will we tell the server what the temperature is? I suppose it might be able to connect to the Lakeshore controller and get the tempreature that way?
+- impelement safe socket communications?
+- generalized control loop with various options
+- expand gui to allow for control independent of server, show status, etc.
+- PID loop tuning (preferably from the GUI)
+- add documentation.
+- reconcile simulated and physical voltage read calls.
 
 '''
 
@@ -38,6 +33,7 @@ import numpy as np
 import time
 import sys
 import socket
+import re
 
 
 ##########################
@@ -104,27 +100,19 @@ class StrainServer:
     def initialize_instruments(self):
         '''
         Sets initial setting and paramters for both LCR meter and power supply.
-
-        args: None
-
-        returns: None
         '''
 
         return 1
 
     def start_strain_control(self):
         '''
-        Handles setting new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with a restricted PID loop.
-
-        args: None
-
-        returns: None
+        High level handling of strain control. For now, sets new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with a restricted PID loop.
         '''
 
         current_setpoint = self.setpoint.locked_read() # hold initial setpoint
         pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
         print('setting rough voltage')
-        #self.set_strain_rough()
+        #self.set_strain_rough(current_setpoint)
         print('rough voltage achieved, starting PID')
         pid_loop.start()
 
@@ -138,18 +126,14 @@ class StrainServer:
                         pid_loop.join()
                         print('Stopped PID loop')
                 pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-                #self.set_strain_rough()
+                #self.set_strain_rough(current_setpoint)
                 pid_loop.start()
         pid_loop.stop()
         pid_loop.join()
 
     def start_strain_monitor(self):
         '''
-        Continuously reads lcr meter and extracts strain. Intended to be run as a separate StoppableThread within the main loop.
-
-        args: None
-
-        returns: None
+        Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
 
         current_thread = threading.current_thread()
@@ -163,7 +147,7 @@ class StrainServer:
             self.voltage_1.locked_update(v1)
             self.voltage_2.locked_update(v2)
 
-    def start_plots(self):
+    def start_display(self):
         '''
         initiate plotting.
         '''
@@ -238,22 +222,9 @@ class StrainServer:
             fig.canvas.draw()
             fig.canvas.flush_events()
 
-    def start_strain_display(self):
-
-        current_thread = threading.current_thread()
-        while current_thread.stopped()==False:
-
-            new_strain = self.strain.locked_read()
-            new_v1 = self.voltage_1.locked_read()
-            #new_v2 = self.voltage_2.locked_read()
-            new_v2 = self.setpoint.locked_read()
-            new_cap = self.cap.locked_read()
-
-            print(f'Strain: {new_strain} \t Voltage 1: {new_v1} \t Setpoint: {new_v2} \t Capacitance: {new_cap}')
-
     def start_comms(self):
         '''
-        start listening to serversocket and respond accordingly.
+        start listening to serversocket and respond to connect requests with typical socket communications.
         '''
 
         current_thread = threading.current_thread()
@@ -267,18 +238,33 @@ class StrainServer:
                 print(f'Connected to strain client at address {addr}')
                 while True: # run main loop
                     message = conn.recv(1024)
+                    print('Receive from client initiated.')
                     if not message:
                         print('Message received and strain client terminated connection.')
                         break
                     decoded_message = message.decode('utf8')
-                    response = self.parse_message(decoded_message)
-                    conn.sendall(response.encode('utf8'))
+                    try:
+                        response = self.parse_message(decoded_message)
+                    except:
+                        error_msg = 'Error: unable to parse message: '+str(message)
+                        print(error_msg)
+                        conn.sendall(error_msg.encode('utf8'))
+                        break
+                    try:
+                        print('Transmitting response to client')
+                        conn.sendall(response.encode('utf8'))
+                    except:
+                        error_msg = 'Error: unable to transmit response to client.'
+                        print(error_msg)
+                        conn.sendall(error_msg.encode('utf8'))
+                        break
 
-    def set_strain_rough(self):
+    def set_strain_rough(self, setpoint):
         '''
         Ramp voltage on power supply to an approximately correct strain, returning once that strain has been achieved within tolerance. This can be proceeded by PID control.
 
-        args: None
+        args:
+            - setpoint(float):  strain setpoint. We take this as an explicit parameter to avoid possible conflicts and make this function cleaner.
 
         returns: None
 
@@ -445,12 +431,44 @@ class StrainServer:
 
     def parse_message(self, message):
         '''
-        Utility that takes in message and returns
+        Utility that implements communications protocol with strain client. If message is not parable, error handling is handled by communication loop.
+
+        args:
+            - message(string):
+
+        returns:
+            - response(string):
         '''
 
-        self.setpoint.locked_update(float(message))
+        if message=='SCTRL:':
+            self.strain_control_loop.start()
+            response = '1'
+        elif message == 'ECTRL:':
+            self.strain_control_loop.stop()
+            response = '1'
+        elif message == 'STR:?':
+            response = str(self.strain.locked_read())
+        elif re.match(r'STR:[0-9]+[\.]?[0-9]*', message):
+            setpoint = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
+            self.setpoint.locked_update(setpoint)
+            response = '1'
+        elif re.match(r'VOL[1-2]:\?', message):
+            channel = int(re.search(r'[1-2]', message)[0])
+            if channel==1:
+                response = str(self.ps.voltage_1)
+            elif channel==2:
+                response = str(self.ps.voltage_2)
+        elif re.match(r'VOL[1-2]:[0-9]+[\.]?[0-9]*', message):
+            channel = int(re.search(r'[1-2]', message)[0])
+            voltage = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[1])
+            self.ps_write(voltage) # change ps_write to specify channel as well.
+            response = '1'
+        elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
+            slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
+            self.ps.slew_rate = slew_rate
+            response = '1'
 
-        return message
+        return response
 
     def do_test_loop(self):
         '''
@@ -469,7 +487,7 @@ class StrainServer:
         #control_loop = StoppableThread(target=self.start_pid, args=(self.setpoint.locked_read(),))
         strain_control_loop.start()
 
-        self.start_plots()
+        self.start_display()
 
         strain_control_loop.stop()
         strain_read_loop.stop()
@@ -486,24 +504,30 @@ class StrainServer:
         self.initialize_instruments()
 
         # start monitoring lcr meter
-        strain_read_loop = StoppableThread(target=self.start_strain_monitor)
-        strain_read_loop.start()
+        self.strain_read_loop = StoppableThread(target=self.start_strain_monitor)
+        self.strain_read_loop.start()
 
-        # start control for demonstration
-        strain_control_loop = StoppableThread(target=self.start_strain_control)
-        strain_control_loop.start()
-
-        # start crude display (for debugging plots)
-        #strain_display_loop = StoppableThread(target=self.start_strain_display)
-        #strain_display_loop.start()
+        # create conntrol thread
+        self.strain_control_loop = StoppableThread(target=self.start_strain_control)
+        #self.strain_control_loop.start()
 
         # start comms
-        comms_loop = StoppableThread(target=self.start_comms)
-        comms_loop.start()
+        self.comms_loop = StoppableThread(target=self.start_comms)
+        self.comms_loop.start()
 
-        self.start_plots()
+        # infinite loop displaying strain
+        self.start_display()
 
-
+        # close everything
+        if self.strain_read_loop.is_alive():
+            self.strain_read_loop.stop()
+        if self.strain_control_loop.is_alive():
+            self.strain_read_loop.stop()
+        if self.comms_loop.is_alive():
+            self.comms_loop.stop()
+        self.strain_read_loop.join()
+        self.strain_control_loop.join()
+        self.comms_loop.join()
 
 if __name__=='__main__':
     '''

@@ -6,12 +6,7 @@ import socket
 ##########################
 ### USER SETTINGS HERE ###
 ##########################
-global MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT
-
-### LIMIT OUTPUT VOLTAGE HERE ###
-
-MAX_VOLTAGE = 119 # V
-MIN_VOLTAGE = -19 # V
+global HOST, PORT
 
 ### COMMUNICATION SETTINGS ###
 HOST = 'localhost'
@@ -28,7 +23,7 @@ class StrainClient:
          self.host = HOST
          self.port = PORT
 
-    def query(self, message):
+    def transmit(self, message):
         '''
         Implement basic query of strain server.
 
@@ -55,29 +50,108 @@ class StrainClient:
             except:
                 raise RuntimeError('unable to recieve response from strain server.')
 
-        print(f'Received: {response}')
+        #print(f'Received: {response}')
         return response.decode('utf8')
 
     def start_strain_control(self):
+        '''
+        initiate control loop on strain server.
 
-        return 1
+        returns:
+            - response:
+        '''
+
+        message = 'SCTRL:'
+        response = self.transmit(message)
+        return response
+
+    def stop_strain_control(self):
+        '''
+        stop control loop on strain server.
+
+        returns:
+            - response:
+        '''
+
+        message = 'ECTRL:'
+        response = self.transmit(message)
+        return response
+
+    def get_strain(self):
+        '''
+        Get current strain from cell.
+
+        args: None
+
+        returns:
+            - strain(float):        strain
+        '''
+
+        message = 'STR:?'
+        strain = float(self.transmit(message))
+        return strain
 
     def change_setpoint(self, new_setpoint):
+        '''
+        change target setpoint of control loop.
 
-        return 1
+        args:
+            - new_setpoint:     setpoint to set
 
-    def set_voltage(self, axis, voltage):
+        returns:
+            - response:
+        '''
 
-        return 1
+        message = 'STR:'+str(new_setpoint)
+        response = self.transmit(message)
+        return response
 
-    def read_strain(self):
+    def get_voltage(self, channel):
+        '''
+        read voltage on given channel.
 
-        return 1
+        args:
+            - channel(int):     channel 1 or 2 on power supply
 
-    def maintain_voltage(self):
+        returns:
+            - voltage(float):
+        '''
 
-        return 1
+        if not(channel==1 or channel==2):
+            raise ValueError('Invalid power supply voltage channel, please choose either 1 or 2.')
+        message = 'VOL'+str(channel)+':?'
+        voltage = float(self.transmit(message))
+        return voltage
 
-    def change_ramp_rate(self, new_rr):
+    def set_voltage(self, channel, voltage):
+        '''
+        sets voltage explicitly on channel 1 or 2
 
-        return 1
+        args:
+            - channel(int):     channel 1 or 2 on power supply
+            - voltage(float):   voltage to set
+
+        returns:
+            - response:
+        '''
+
+        if not(channel==1 or channel==2):
+            raise ValueError('Invalid power supply voltage channel, please choose either 1 or 2.')
+        message = 'VOL'+str(channel)+':'+str(voltage)
+        response = self.transmit(message)
+        return response
+
+    def change_ramp_rate(self, slew_rate):
+        '''
+        change voltage ramp rate on power supply:
+
+        args:
+            - slew_rate(float):    slew rate in V/s
+
+        returns:
+            - response:
+        '''
+
+        message = 'VSLW:'+str(slew_rate)
+        response = self.transmit(message)
+        return response
