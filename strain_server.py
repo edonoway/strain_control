@@ -18,6 +18,10 @@ SOME IMPORTANT SAFETY NOTES:
 
 Two issues: (1) getting PID to play with rough ramp, (2) robustly updating strain object rather than coupling it with writing.
 
+To Do:
+- come up with good way to closer server safely, setting voltages to 0 slowly, etc.
+- implement server functions
+
 
 '''
 
@@ -33,16 +37,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import sys
-
+import socket
 
 
 ##########################
 ### USER SETTINGS HERE ###
 ##########################
-global SIM, STARTING_SETPOINT, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE
+global SIM, STARTING_SETPOINT, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
 SIM=True
-STARTING_SETPOINT=0.075
+STARTING_SETPOINT=0
 P=1000
 I=100
 D=0.1
@@ -53,19 +57,26 @@ L0 = 68.68 # initial capacitor spacing
 MAX_VOLTAGE = 119 # V
 MIN_VOLTAGE = -19 # V
 
+### COMMUNICATION SETTINGS ###
+LCR_ADDRESS = None
+PS_ADDRESS = None
+HOST = 'localhost'
+PORT = 8888
+
 ###########################
 ###########################
 ###########################
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, setpoint, P, I, D, l0=68.68, sim=False):
+    def __init__(self, lcr, ps, serversocket, setpoint, P, I, D, l0=68.68, sim=False):
         '''
         class constructor.
 
         args:
             - lcr                   pymeasure LCR handle or simulation object
             - ps:                   pymeasure power supply handle or simulation object
+            - s:                    a bound socket for communicating with strain client.
             - setpoint(float):       initial setpoint for PID
             - P(float):              proportional PID parameter
             - I(float):              integral PID parameter
@@ -76,6 +87,7 @@ class StrainServer:
 
         self.lcr = lcr
         self.ps = ps
+        self.serversocket = s
         self.l0 = l0
         self.sim = sim
         strain, cap, imaginary_impedance, dl, _ = self.get_strain()
@@ -110,9 +122,9 @@ class StrainServer:
         '''
 
         current_setpoint = self.setpoint.locked_read() # hold initial setpoint
-        pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,))
+        pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
         print('setting rough voltage')
-        self.set_strain_rough()
+        #self.set_strain_rough()
         print('rough voltage achieved, starting PID')
         pid_loop.start()
 
@@ -124,8 +136,9 @@ class StrainServer:
                 if pid_loop.is_alive():
                         pid_loop.stop()
                         pid_loop.join()
-                pid_loop = Thread(target=self.start_pid, args=(current_setpoint,))
-                self.set_strain_rough()
+                        print('Stopped PID loop')
+                pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
+                #self.set_strain_rough()
                 pid_loop.start()
         pid_loop.stop()
         pid_loop.join()
@@ -149,6 +162,117 @@ class StrainServer:
             self.dl.locked_update(dl)
             self.voltage_1.locked_update(v1)
             self.voltage_2.locked_update(v2)
+
+    def start_plots(self):
+        '''
+        initiate plotting.
+        '''
+
+        # setup plots
+        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
+        fig.set_size_inches(10, 8)
+        window = 1000
+        nstep = 1
+        ax11.set_ylabel('strain (a.u.)')
+        ax11.set_xlabel('time (s)')
+        ax12.set_ylabel('voltage 1 (V)')
+        ax12.set_xlabel('time (s)')
+        ax21.set_ylabel('voltage 2 (V)')
+        ax21.set_xlabel('time (s)')
+        ax22.set_ylabel('capacitance (pF)')
+        ax22.set_xlabel('time (s)')
+
+        time_vect = np.zeros(window) #np.linspace(0,1,window)
+        strain_vect = np.zeros(window)
+        v1_vect = np.zeros(window)
+        v2_vect = np.zeros(window)
+        cap_vect = np.zeros(window)
+        line11, = ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
+        line12, = ax12.plot(time_vect, v1_vect, 'o', ms=3, color='blue')
+        line21, = ax21.plot(time_vect, v2_vect, 'o', ms=3, color='red')
+        line22, = ax22.plot(time_vect, cap_vect, 'o', ms=3, color='green')
+        plt.tight_layout()
+        fig.canvas.draw()
+
+        n = 0
+        j = 0
+        t0 = time.time()
+
+        while True:
+            n = n + 1
+            i = n % nstep
+
+            t = time.time() - t0
+            new_strain = self.strain.locked_read()
+            new_v1 = self.voltage_1.locked_read()
+            #new_v2 = self.voltage_2.locked_read()
+            new_v2 = self.setpoint.locked_read()
+            new_cap = self.cap.locked_read()
+
+            if i == 0:
+                # update plot
+                time_vect[j] = t
+                strain_vect[j] = new_strain
+                v1_vect[j] = new_v1
+                v2_vect[j] = new_v2
+                cap_vect[j] = new_cap
+                j = (j + 1) % window
+
+            line11.set_xdata(time_vect)
+            line11.set_ydata(strain_vect)
+            line12.set_xdata(time_vect)
+            line12.set_ydata(v1_vect)
+            line21.set_xdata(time_vect)
+            line21.set_ydata(v2_vect)
+            line22.set_xdata(time_vect)
+            line22.set_ydata(cap_vect)
+            ax11.set_xlim(np.min(time_vect), np.max(time_vect))
+            ax12.set_xlim(np.min(time_vect), np.max(time_vect))
+            ax21.set_xlim(np.min(time_vect), np.max(time_vect))
+            ax22.set_xlim(np.min(time_vect), np.max(time_vect))
+            ax11.set_ylim(np.min(strain_vect),np.max(strain_vect)*1.2)
+            ax12.set_ylim(np.min(v1_vect),np.max(v1_vect)*1.2)
+            ax21.set_ylim(np.min(v2_vect),np.max(v2_vect)*1.2)
+            ax22.set_ylim(np.min(cap_vect),np.max(cap_vect)*1.2)
+            plt.pause(0.05)
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+
+    def start_strain_display(self):
+
+        current_thread = threading.current_thread()
+        while current_thread.stopped()==False:
+
+            new_strain = self.strain.locked_read()
+            new_v1 = self.voltage_1.locked_read()
+            #new_v2 = self.voltage_2.locked_read()
+            new_v2 = self.setpoint.locked_read()
+            new_cap = self.cap.locked_read()
+
+            print(f'Strain: {new_strain} \t Voltage 1: {new_v1} \t Setpoint: {new_v2} \t Capacitance: {new_cap}')
+
+    def start_comms(self):
+        '''
+        start listening to serversocket and respond accordingly.
+        '''
+
+        current_thread = threading.current_thread()
+        while current_thread.stopped()==False:
+
+            self.serversocket.listen(1)
+            print('Listening for strain client')
+            conn, addr = self.serversocket.accept()
+
+            with conn:
+                print(f'Connected to strain client at address {addr}')
+                while True: # run main loop
+                    message = conn.recv(1024)
+                    if not message:
+                        print('Message received and strain client terminated connection.')
+                        break
+                    decoded_message = message.decode('utf8')
+                    response = self.parse_message(decoded_message)
+                    conn.sendall(response.encode('utf8'))
 
     def set_strain_rough(self):
         '''
@@ -197,17 +321,20 @@ class StrainServer:
             v1, v2 = self.ps_read()
             v0 = v1
 
+        print(f'Starting PID with setpoint {setpoint}')
+
         self.pid.setpoint = setpoint
 
         current_thread = threading.current_thread()
         while current_thread.stopped()==False:
 
             # compute new output given current strain
-            new_voltage = self. pid(self.strain.locked_read())
-            #if limit==True:
-            #     dv = new_voltage - v0
-            #    if abs(dv) > 5:
-            #        new_voltage = v0 + 5*(dv/abs(dv))
+            new_voltage = self.pid(self.strain.locked_read())
+            if limit==True:
+                dv = new_voltage - v0
+                if abs(dv) > 5:
+                    new_voltage = v0 + 5*(dv/abs(dv))
+            #print(new_voltage)
             # set the new output and get current value
             self.ps_write(new_voltage)
 
@@ -316,133 +443,108 @@ class StrainServer:
         voltage = dl/response
         return voltage
 
+    def parse_message(self, message):
+        '''
+        Utility that takes in message and returns
+        '''
+
+        self.setpoint.locked_update(float(message))
+
+        return message
+
     def do_test_loop(self):
         '''
         This test is meant to illustrate the usage of this package.
         '''
         self.initialize_instruments()
 
+        self.setpoint.locked_update(0.02)
+
         # start monitoring lcr meter
         strain_read_loop = StoppableThread(target=self.start_strain_monitor)
         strain_read_loop.start()
 
         # start control loop
-        control_loop = StoppableThread(target=self.start_strain_control)
+        strain_control_loop = StoppableThread(target=self.start_strain_control)
         #control_loop = StoppableThread(target=self.start_pid, args=(self.setpoint.locked_read(),))
-        control_loop.start()
+        strain_control_loop.start()
 
-        # setup plots
-        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
-        window = 10000
-        nstep = 1
-        ax11.set_ylabel('strain (a.u.)')
-        ax11.set_xlabel('time (s)')
-        ax12.set_ylabel('voltage 1 (V)')
-        ax12.set_xlabel('time (s)')
-        ax21.set_ylabel('voltage 2 (V)')
-        ax21.set_xlabel('time (s)')
-        ax22.set_ylabel('capacitance (pF)')
-        ax22.set_xlabel('time (s)')
+        self.start_plots()
 
-        time_vect = np.zeros(window) #np.linspace(0,1,window)
-        strain_vect = np.zeros(window)
-        v1_vect = np.zeros(window)
-        v2_vect = np.zeros(window)
-        cap_vect = np.zeros(window)
-        line11, = ax11.plot(time_vect, strain_vect, '-o', ms=1, color='orange')
-        line12, = ax12.plot(time_vect, v1_vect, '-o', ms=1, color='blue')
-        line21, = ax21.plot(time_vect, v2_vect, '-o', ms=1, color='red')
-        line22, = ax22.plot(time_vect, cap_vect, '-o', ms=1, color='green')
-        plt.tight_layout()
-        fig.canvas.draw()
-
-        n = 0
-        j = 0
-        t0 = time.time()
-        while j < window:
-            n = n + 1
-            i = n % nstep
-
-            t = time.time() - t0
-            new_strain = self.strain.locked_read()
-            new_v1 = self.voltage_1.locked_read()
-            new_v2 = self.voltage_2.locked_read()
-            new_cap = self.cap.locked_read()
-
-            if i == 0:
-                # update plot
-                time_vect[j] = t
-                strain_vect[j] = new_strain
-                v1_vect[j] = new_v1
-                v2_vect[j] = new_v2
-                cap_vect[j] = new_cap
-                j = j + 1
-
-            line11.set_xdata(time_vect)
-            line11.set_ydata(strain_vect)
-            line12.set_xdata(time_vect)
-            line12.set_ydata(v1_vect)
-            line21.set_xdata(time_vect)
-            line21.set_ydata(v2_vect)
-            line22.set_xdata(time_vect)
-            line22.set_ydata(cap_vect)
-            ax11.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax12.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax21.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax22.set_xlim(np.min(time_vect), np.max(time_vect))
-            ax11.set_ylim(np.min(strain_vect),np.max(strain_vect))
-            ax12.set_ylim(np.min(v1_vect),np.max(v1_vect))
-            ax21.set_ylim(np.min(v2_vect),np.max(v2_vect))
-            ax22.set_ylim(np.min(cap_vect),np.max(cap_vect))
-            plt.pause(0.05)
-            fig.canvas.draw()
-            fig.canvas.flush_events()
-
-        control_loop.stop()
+        strain_control_loop.stop()
         strain_read_loop.stop()
-        control_loop.join()
+        strain_control_loop.join()
         strain_read_loop.join()
-
-        #ax11.plot(time_vect, strain_vect, 'o', ms=0.5, color='orange')
-        #ax12.plot(time_vect, v1_vect, 'o', ms=0.5, color='blue')
-        #ax21.plot(time_vect, v2_vect, 'o', ms=0.5, color='red')
-        #ax22.plot(time_vect, cap_vect, 'o', ms=0.5, color='green')
 
     def do_main_loop(self):
         '''
-        Main loop. Starts a server socket and listens for various commands, starting and closing threads as necessary.
+        Main loop. Starts listening to client server for various commands, starting and closing threads as necessary.
         '''
 
-        return 1
+        # this should not start any control explicitly, such that if anything fails and the server must be restarted, it starts off in a stable state.
+
+        self.initialize_instruments()
+
+        # start monitoring lcr meter
+        strain_read_loop = StoppableThread(target=self.start_strain_monitor)
+        strain_read_loop.start()
+
+        # start control for demonstration
+        strain_control_loop = StoppableThread(target=self.start_strain_control)
+        strain_control_loop.start()
+
+        # start crude display (for debugging plots)
+        #strain_display_loop = StoppableThread(target=self.start_strain_display)
+        #strain_display_loop.start()
+
+        # start comms
+        comms_loop = StoppableThread(target=self.start_comms)
+        comms_loop.start()
+
+        self.start_plots()
+
+
 
 if __name__=='__main__':
     '''
-    Set SIM to True to simulate power supply and lcr meter for testing of code.
+    Set SIM to True to simulate power supply and lcr meter for testing of code. Opens up communication channels and starts main server loop.
     '''
 
-    # initiate conections to lcr and ps
     if SIM==True:
+
         lcr = SimulatedLCR(0.808)
         ps = SimulatedPS(lcr)
 
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((HOST, PORT))
+
+            strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, l0=L0, sim=SIM)
+
+            # start test with command line argument '-test'
+            args = sys.argv
+            if len(args)>=2:
+                if args[1]=='-test':
+                    strainserver.do_test_loop()
+            else:
+                strainserver.do_main_loop()
+
     else:
+
         # visa
         rm = pyvisa.ResourceManager()
         resources = rm.list_resources()
-        resources
-        inst1 = rm.open_resource(resources[1])
-        # setup connection with both instruments and initialize
-        lcr_address = ''
-        ps_address = ''
-        lcr = AgilentE4980(lcr_address)
-        ps = razorbillRP100(ps_address)
+        print(resources)
 
-    # generate server object
-    strainserver = StrainServer(lcr, ps, STARTING_SETPOINT, P, I, D, l0=L0, sim=SIM)
+        with AgilentE4980(LCR_ADDRESS) as lcr:
+            with razorbillRP100(PS_ADDRESS) as ps:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind((HOST, PORT))
 
-    # start test with command line argument '-test'
-    args = sys.argv
-    if args[1]=='-test':
-        strainserver.do_test_loop()
-    else:
-        strainserver.do_main_loop()
+                    strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, l0=L0, sim=SIM)
+
+                    # start test with command line argument '-test'
+                    args = sys.argv
+                    if args[1]=='-test':
+                        strainserver.do_test_loop()
+                    else:
+                        strainserver.do_main_loop()
