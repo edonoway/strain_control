@@ -53,15 +53,25 @@ class StrainClient:
         #print(f'Received: {response}')
         return response.decode('utf8')
 
-    def start_strain_control(self):
+    def start_strain_control(self, mode='PID'):
         '''
         initiate control loop on strain server.
 
         returns:
             - response:
-        '''
 
-        message = 'SCTRL:'
+        kwargs:
+            - mode(string):     'PID', 'Set Voltage', or 'Combined'
+        '''
+        if mode not in ['PID', 'Set Voltage', 'Combined']:
+            raise ValueError('invalid control mode, please input PID, Set Voltage, or Combine.')
+        if mode=='PID':
+            code=1
+        elif mode=='Set Voltage':
+            code=2
+        elif mode=='Combined':
+            code=3
+        message = 'SCTRL:'+str(code)
         response = self.transmit(message)
         return response
 
@@ -141,7 +151,7 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
-    def change_ramp_rate(self, slew_rate):
+    def change_slew_rate(self, slew_rate):
         '''
         change voltage ramp rate on power supply:
 

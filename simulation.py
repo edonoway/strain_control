@@ -63,9 +63,13 @@ class SimulatedPS:
                 t = time.time()
                 dt = t-t0
                 dv = sign*self.slew_rate.locked_read()*dt
-                # only accept dv if it gets you closer to the setpoint
-                if abs(v1 + dv) > abs(v):
-                    dv = v - v1
+                # only accept dv if it doesn't overshoot
+                if sign==1:
+                    if v1 + dv > v:
+                        dv = v - v1
+                elif sign==-1:
+                    if v1 + dv < v:
+                        dv = v - v1
                 v_new = v1 + dv
                 v1 = v_new
                 self.voltage_1.locked_update(v_new)
@@ -85,8 +89,12 @@ class SimulatedPS:
                     dt = t-t0
                     dv = sign*self.slew_rate.locked_read()*dt
                     # only accept dv if it gets you closer to the setpoint
-                    if abs(v2 + dv) > abs(v):
-                        dv = v - v2
+                    if sign==1:
+                        if v2 + dv > v:
+                            dv = v - v2
+                    elif sign==-1:
+                        if v2 + dv < v:
+                            dv = v - v2
                     v_new = v1 + dv
                     v2 = v_new
                     self.voltage_2.locked_update(v_new)

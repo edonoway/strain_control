@@ -16,10 +16,17 @@ To Do:
 (6) fix PID and how it interacts with rough ramp
 (7) add some feedback control to rough ramp, or an option to do so
 (8) add in helpful print statements to inform user on status of server and it's communication status
-(9) reconcile simulated and physical voltage read calls
 (10) safer socket communication, if possible, though so far it seems to be working okay.
 (11) fix axes scaling on plots
 (12) strain depends on initial separation and length of sample. Find some good way to get this initialized.
+(13) have get_strain on client actually get a bunch of different things.
+(14) add PID tuning
+
+one thing that I have just realized is that it is probably better to not stop a PID loop and then start again when changing setpoint, since then you loose all the older data...hmm
+
+immediate: fix algorithm of set_strain(), fix negative ramping in simulation
+
+ponder making multiprocessed rather than multithreaded, at least for the control loop
 
 '''
 
@@ -99,6 +106,7 @@ class StrainServer:
         self.voltage_1 = LockedVar(v1)
         self.voltage_2 = LockedVar(v2)
         self.pid = PID(P, I, D, setpoint=self.setpoint.locked_read())
+        self.ctrl_mode = LockedVar(1)
 
     def initialize_instruments(self):
         '''
@@ -107,32 +115,73 @@ class StrainServer:
 
         return 1
 
-    def start_strain_control(self):
+    def start_strain_control(self, mode):
         '''
         High level handling of strain control. For now, sets new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with a restricted PID loop.
+
+        args:
+            - mode(int):     1:'PID, 2:'Set Voltage', or 3:'Combined'
+
+        returns: None
         '''
 
-        current_setpoint = self.setpoint.locked_read() # hold initial setpoint
-        pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-        print('setting rough voltage')
-        #self.set_strain_rough(current_setpoint)
-        print('rough voltage achieved, starting PID')
-        pid_loop.start()
+        current_setpoint = self.setpoint.locked_read()
 
-        current_thread = threading.current_thread()
-        while current_thread.stopped()==False:
-            new_setpoint = self.setpoint.locked_read()
-            if new_setpoint != current_setpoint:
+        if mode==1:
+
+            pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
+            print('Starting PID control.')
+            pid_loop.start()
+
+            current_thread = threading.current_thread()
+            while current_thread.stopped()==False:
+                new_setpoint = self.setpoint.locked_read()
                 current_setpoint = new_setpoint
-                if pid_loop.is_alive():
+                self.pid.setpoint = current_setpoint
+
+            print('Stopping PID control')
+            pid_loop.stop()
+            pid_loop.join()
+
+        elif mode==2:
+
+            print('Starting constant voltage control.')
+            self.set_strain(current_setpoint)
+
+            current_thread = threading.current_thread()
+            while current_thread.stopped()==False:
+                new_setpoint = self.setpoint.locked_read()
+                if new_setpoint != current_setpoint:
+                    current_setpoint = new_setpoint
+                    self.set_strain(current_setpoint)
+            print('Stopping constant voltage control.')
+
+        elif mode==3:
+
+            pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
+            print('Setting strain with fixed voltage.')
+            self.set_strain(current_setpoint)
+            print('Strain achieved, starting PID control.')
+            pid_loop.start()
+
+            current_thread = threading.current_thread()
+            while current_thread.stopped()==False:
+                new_setpoint = self.setpoint.locked_read()
+                if new_setpoint != current_setpoint:
+                    current_setpoint = new_setpoint
+                    if pid_loop.is_alive():
                         pid_loop.stop()
                         pid_loop.join()
-                        print('Stopped PID loop')
-                pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-                #self.set_strain_rough(current_setpoint)
-                pid_loop.start()
-        pid_loop.stop()
-        pid_loop.join()
+                        print('Stopping PID control.')
+                    pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
+                    print('Setting strain with fixed voltage.')
+                    self.set_strain(current_setpoint)
+                    print('Strain achieved, starting PID control.')
+                    pid_loop.start()
+
+            print('Stopping PID control.')
+            pid_loop.stop()
+            pid_loop.join()
 
     def start_strain_monitor(self):
         '''
@@ -160,7 +209,6 @@ class StrainServer:
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         fig.set_size_inches(10, 8)
         window = 1000
-        nstep = 1
         ax11.set_ylabel('strain (a.u.)')
         ax11.set_xlabel('time (s)')
         ax12.set_ylabel('voltage 1 (V)')
@@ -182,17 +230,20 @@ class StrainServer:
         plt.tight_layout()
         fig.canvas.draw()
 
-        n = 0
         j = 0
         t0 = time.time()
-
+        t_old = t0
+        i = 0
+        update_dt = 0.1
         while True:
-            n = n + 1
-            i = n % nstep
 
-            if i == 0:
+            t_new = time.time()
+            dt = t_new - t_old
 
-                t = time.time() - t0
+            if dt>=update_dt:
+
+                t_old = t_new
+                t = t_new - t0
                 new_strain = self.strain.locked_read()
                 new_v1 = self.voltage_1.locked_read()
                 new_v2 = self.voltage_2.locked_read()
@@ -265,7 +316,7 @@ class StrainServer:
                         conn.sendall(error_msg.encode('utf8'))
                         break
 
-    def set_strain_rough(self, setpoint):
+    def set_strain(self, setpoint):
         '''
         Ramp voltage on power supply to an approximately correct strain, returning once that strain has been achieved within tolerance. This can be proceeded by PID control.
 
@@ -281,6 +332,7 @@ class StrainServer:
         start_voltage = self.strain_to_voltage(setpoint_val)
         voltage_increment = 0.5
         strain_tol=0.005
+        direction = (setpoint_val - strain_val)/abs(setpoint_val - strain_val)
 
         n=0
         while abs(strain_val) <= abs(setpoint_val):
@@ -290,7 +342,7 @@ class StrainServer:
             loop_cond = True
             while loop_cond:
                 v1, v2 = self.get_voltage(1), self.get_voltage(2)
-                if v1 > (approx_voltage - ps.tol) or v1 < (approx_voltage + ps.tol):
+                if v1 > (approx_voltage - self.ps.tol) or v1 < (approx_voltage + self.ps.tol):
                     loop_cond = False
                 strain_val = self.strain.locked_read()
                 if abs(strain_val) >= abs(setpoint_val):
@@ -313,12 +365,13 @@ class StrainServer:
             v1, v2 = self.ps_read()
             v0 = v1
 
-        print(f'Starting PID with setpoint {setpoint}')
-
         self.pid.setpoint = setpoint
 
         current_thread = threading.current_thread()
         while current_thread.stopped()==False:
+
+            # update setpoint
+            #self.pid.setpoint = self.setpoint.locked_read()
 
             # compute new output given current strain
             new_voltage = self.pid(self.strain.locked_read())
@@ -470,11 +523,23 @@ class StrainServer:
             - response(string):
         '''
 
-        if message=='SCTRL:':
-            self.strain_control_loop.start()
+        if re.match(r'SCTRL:[1-3]', message):
+            mode = int(re.search(r'[1-3]', message)[0])
+            if self.strain_control_loop.is_alive():
+                if mode!=self.ctrl_mode:
+                    self.ctrl_mode.locked_update(mode)
+                    self.strain_control_loop.stop()
+                    self.strain_control_loop.join()
+                    self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
+                    self.strain_control_loop.start()
+            else:
+                self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
+                self.strain_control_loop.start()
             response = '1'
         elif message == 'ECTRL:':
-            self.strain_control_loop.stop()
+            if self.strain_control_loop.is_alive():
+                self.strain_control_loop.stop()
+                self.strain_control_loop.join()
             response = '1'
         elif message == 'STR:?':
             response = str(self.strain.locked_read())
@@ -488,12 +553,12 @@ class StrainServer:
             response = str(v)
         elif re.match(r'VOL[1-2]:-?[0-9]+[\.]?[0-9]*', message):
             channel = int(re.search(r'[1-2]', message)[0])
-            voltage = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[1])
+            voltage = float(re.findall(r'-?[0-9]+[\.]?[0-9]*', message)[1])
             self.set_voltage(channel, voltage) # change ps_write to specify channel as well.
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
-            self.ps.slew_rate = slew_rate
+            self.ps.slew_rate.locked_update(slew_rate)
             response = '1'
 
         return response
@@ -536,8 +601,7 @@ class StrainServer:
         self.strain_read_loop.start()
 
         # create conntrol thread
-        self.strain_control_loop = StoppableThread(target=self.start_strain_control)
-        #self.strain_control_loop.start()
+        self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
 
         # start comms
         self.comms_loop = StoppableThread(target=self.start_comms)
