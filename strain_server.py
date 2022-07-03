@@ -8,7 +8,7 @@ SOME IMPORTANT SAFETY NOTES:
 - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
 To Do:
-(1) add several control loop modes (PID, PID+rough, only rough) and seamless transition between the modes
+
 (2) read temperature on lakeshore
 (3) expand GUI to be able to control, display PID params, etc.
 (4) add documentation
@@ -107,6 +107,9 @@ class StrainServer:
         self.voltage_2 = LockedVar(v2)
         self.pid = PID(P, I, D, setpoint=self.setpoint.locked_read())
         self.ctrl_mode = LockedVar(1)
+        self.run = LockedVar(True)
+        self.host = HOST
+        self.port = PORT
 
     def initialize_instruments(self):
         '''
@@ -145,7 +148,7 @@ class StrainServer:
 
         elif mode==2:
 
-            print('Starting constant voltage control.')
+            print('Starting constant voltage control')
             self.set_strain(current_setpoint)
 
             current_thread = threading.current_thread()
@@ -154,14 +157,14 @@ class StrainServer:
                 if new_setpoint != current_setpoint:
                     current_setpoint = new_setpoint
                     self.set_strain(current_setpoint)
-            print('Stopping constant voltage control.')
+            print('Stopping constant voltage control')
 
         elif mode==3:
 
             pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-            print('Setting strain with fixed voltage.')
+            print('Setting strain with fixed voltage')
             self.set_strain(current_setpoint)
-            print('Strain achieved, starting PID control.')
+            print('Strain achieved, starting PID control')
             pid_loop.start()
 
             current_thread = threading.current_thread()
@@ -172,14 +175,14 @@ class StrainServer:
                     if pid_loop.is_alive():
                         pid_loop.stop()
                         pid_loop.join()
-                        print('Stopping PID control.')
+                        print('Stopping PID control')
                     pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-                    print('Setting strain with fixed voltage.')
+                    print('Setting strain with fixed voltage')
                     self.set_strain(current_setpoint)
-                    print('Strain achieved, starting PID control.')
+                    print('Strain achieved, starting PID control')
                     pid_loop.start()
 
-            print('Stopping PID control.')
+            print('Stopping PID control')
             pid_loop.stop()
             pid_loop.join()
 
@@ -187,6 +190,8 @@ class StrainServer:
         '''
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
+
+        print('Starting strain monitor')
 
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
@@ -204,6 +209,8 @@ class StrainServer:
         '''
         initiate plotting.
         '''
+
+        print('Starting GUI display')
 
         # setup plots
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
@@ -235,7 +242,8 @@ class StrainServer:
         t_old = t0
         i = 0
         update_dt = 0.1
-        while True:
+
+        while self.run.locked_read() == True:
 
             t_new = time.time()
             dt = t_new - t_old
@@ -284,37 +292,40 @@ class StrainServer:
         start listening to serversocket and respond to connect requests with typical socket communications.
         '''
 
+        print(f'Opening communication socket on {self.host} at port {self.port}')
+
         current_thread = threading.current_thread()
-        while current_thread.stopped()==False:
-
-            self.serversocket.listen(1)
-            print('Listening for strain client')
-            conn, addr = self.serversocket.accept()
-
-            with conn:
-                print(f'Connected to strain client at address {addr}')
-                while True: # run main loop
-                    message = conn.recv(1024)
-                    print('Receive from client initiated.')
-                    if not message:
-                        print('Message received and strain client terminated connection.')
-                        break
-                    decoded_message = message.decode('utf8')
-                    try:
-                        response = self.parse_message(decoded_message)
-                    except:
-                        error_msg = 'Error: unable to parse message: '+str(message)
-                        print(error_msg)
-                        conn.sendall(error_msg.encode('utf8'))
-                        break
-                    try:
-                        print('Transmitting response to client')
-                        conn.sendall(response.encode('utf8'))
-                    except:
-                        error_msg = 'Error: unable to transmit response to client.'
-                        print(error_msg)
-                        conn.sendall(error_msg.encode('utf8'))
-                        break
+        while True:
+            if current_thread.stopped()==False:
+                self.serversocket.listen(1)
+                print('Listening for strain client')
+                conn, addr = self.serversocket.accept()
+                with conn:
+                    #print(f'Connected to strain client at address {addr}')
+                    while True: # run main loop
+                        message = conn.recv(1024)
+                        #print('Receive from client initiated.')
+                        if not message:
+                            #print('Message received and strain client terminated connection.')
+                            break
+                        decoded_message = message.decode('utf8')
+                        try:
+                            response = self.parse_message(decoded_message)
+                        except:
+                            error_msg = 'Error: unable to parse message: '+str(message)
+                            print(error_msg)
+                            conn.sendall(error_msg.encode('utf8'))
+                            break
+                        try:
+                            #print('Transmitting response to client')
+                            conn.sendall(response.encode('utf8'))
+                        except:
+                            error_msg = 'Error: unable to transmit response to client.'
+                            print(error_msg)
+                            conn.sendall(error_msg.encode('utf8'))
+                            break
+            else:
+                break
 
     def set_strain(self, setpoint):
         '''
@@ -419,6 +430,7 @@ class StrainServer:
                     self.ps.voltage_1 = voltage
                 elif channel==2:
                     self.ps.voltage_2 = voltage
+            #print(f'Ramping voltage on channel {channel} to {voltage} V')
         except:
             print('Error: invaid voltage channel, please choose 1 or 2.')
 
@@ -450,6 +462,14 @@ class StrainServer:
             return v
         except:
             print('Error: invaid voltage channel, please choose 1 or 2.')
+
+    def set_slew_rate(self, slew_rate):
+        '''
+        utility to set slew rate on power supply
+        '''
+
+        print(f'Setting slew rate on power supply to {slew_rate} V/s')
+        self.ps.slew_rate.locked_update(slew_rate)
 
     def get_strain(self):
         '''
@@ -526,13 +546,19 @@ class StrainServer:
         if re.match(r'SCTRL:[1-3]', message):
             mode = int(re.search(r'[1-3]', message)[0])
             if self.strain_control_loop.is_alive():
-                if mode!=self.ctrl_mode:
+                current_mode = self.ctrl_mode.locked_read()
+                if mode!=current_mode:
+                    print(f'Stopping control thread in mode {current_mode} and restarting in mode {mode}')
                     self.ctrl_mode.locked_update(mode)
                     self.strain_control_loop.stop()
                     self.strain_control_loop.join()
                     self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
                     self.strain_control_loop.start()
+                else:
+                    print(f'Control thread in mode {mode} already in progress, no action taken')
             else:
+                print(f'Starting control thread in mode {mode}')
+                self.ctrl_mode.locked_update(mode)
                 self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
                 self.strain_control_loop.start()
             response = '1'
@@ -558,7 +584,12 @@ class StrainServer:
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
-            self.ps.slew_rate.locked_update(slew_rate)
+            self.set_slew_rate(slew_rate)
+            response = '1'
+
+        elif message=='SHTDWN':
+            self.run.locked_update(False)
+            self.comms_loop.stop()
             response = '1'
 
         return response
@@ -597,8 +628,8 @@ class StrainServer:
         self.initialize_instruments()
 
         # start monitoring lcr meter
-        self.strain_read_loop = StoppableThread(target=self.start_strain_monitor)
-        self.strain_read_loop.start()
+        self.strain_monitor_loop = StoppableThread(target=self.start_strain_monitor)
+        self.strain_monitor_loop.start()
 
         # create conntrol thread
         self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
@@ -609,17 +640,26 @@ class StrainServer:
 
         # infinite loop displaying strain
         self.start_display()
+        #while self.run.locked_read()==True:
+        #    continue
 
         # close everything
-        if self.strain_read_loop.is_alive():
-            self.strain_read_loop.stop()
+        print('Shutting down strain server:')
         if self.strain_control_loop.is_alive():
-            self.strain_read_loop.stop()
+            self.strain_control_loop.stop()
+            self.strain_control_loop.join()
+            print('\t Shut down control thread')
+        print('\t Ramping voltage on all channels to 0')
+        self.set_voltage(1, 0)
+        self.set_voltage(2, 0)
+        if self.strain_monitor_loop.is_alive():
+            self.strain_monitor_loop.stop()
+            self.strain_monitor_loop.join()
+            print('\t Shut down monitor thread')
         if self.comms_loop.is_alive():
-            self.comms_loop.stop()
-        self.strain_read_loop.join()
-        self.strain_control_loop.join()
-        self.comms_loop.join()
+            self.comms_loop.join()
+        print('\t Shut down communications thread')
+        print('Strain server shutdown complete')
 
 if __name__=='__main__':
     '''

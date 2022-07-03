@@ -165,3 +165,12 @@ class StrainClient:
         message = 'VSLW:'+str(slew_rate)
         response = self.transmit(message)
         return response
+
+    def shutdown_server(self):
+        '''
+        Terminates strain server, correctly shutting down the system and leaving it in a stable, safe state.
+        '''
+
+        message = 'SHTDWN'
+        response = self.transmit(message)
+        return response
