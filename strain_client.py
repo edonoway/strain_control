@@ -101,20 +101,33 @@ class StrainClient:
         strain = float(self.transmit(message))
         return strain
 
-    def change_setpoint(self, new_setpoint):
+    def get_dl(self):
         '''
-        change target setpoint of control loop.
+        Get current gap from cell.
 
-        args:
-            - new_setpoint:     setpoint to set
+        args: None
 
         returns:
-            - response:
+            - dl(float):        strain
         '''
 
-        message = 'STR:'+str(new_setpoint)
-        response = self.transmit(message)
-        return response
+        message = 'DL:?'
+        dl = float(self.transmit(message))
+        return dl
+
+    def get_cap(self):
+        '''
+        Get current capacitance from cell.
+
+        args: None
+
+        returns:
+            - cap(float):        strain
+        '''
+
+        message = 'CAP:?'
+        cap = float(self.transmit(message))
+        return cap
 
     def get_voltage(self, channel):
         '''
@@ -132,6 +145,21 @@ class StrainClient:
         message = 'VOL'+str(channel)+':?'
         voltage = float(self.transmit(message))
         return voltage
+
+    def change_setpoint(self, new_setpoint):
+        '''
+        change target strain setpoint of control loop.
+
+        args:
+            - new_setpoint:     setpoint to set
+
+        returns:
+            - response:
+        '''
+
+        message = 'STR:'+str(new_setpoint)
+        response = self.transmit(message)
+        return response
 
     def set_voltage(self, channel, voltage):
         '''

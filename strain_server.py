@@ -12,19 +12,14 @@ To Do:
 (2) read temperature on lakeshore
 (3) expand GUI to be able to control, display PID params, etc.
 (4) add documentation
-(5) close server safely and maintain system state permanence
 (6) fix PID and how it interacts with rough ramp
 (7) add some feedback control to rough ramp, or an option to do so
-(8) add in helpful print statements to inform user on status of server and it's communication status
 (10) safer socket communication, if possible, though so far it seems to be working okay.
-(11) fix axes scaling on plots
 (12) strain depends on initial separation and length of sample. Find some good way to get this initialized.
-(13) have get_strain on client actually get a bunch of different things.
 (14) add PID tuning
+(15) add logging
 
-one thing that I have just realized is that it is probably better to not stop a PID loop and then start again when changing setpoint, since then you loose all the older data...hmm
-
-immediate: fix algorithm of set_strain(), fix negative ramping in simulation
+immediate: fix algorithm of set_strain()
 
 ponder making multiprocessed rather than multithreaded, at least for the control loop
 
@@ -218,22 +213,23 @@ class StrainServer:
         window = 1000
         ax11.set_ylabel('strain (a.u.)')
         ax11.set_xlabel('time (s)')
-        ax12.set_ylabel('voltage 1 (V)')
+        ax12.set_ylabel(r'dl ($\mu$m)')
         ax12.set_xlabel('time (s)')
-        ax21.set_ylabel('voltage 2 (V)')
+        ax21.set_ylabel('voltage 1 (V)')
         ax21.set_xlabel('time (s)')
-        ax22.set_ylabel('capacitance (pF)')
+        ax22.set_ylabel('voltage 2 (V)')
         ax22.set_xlabel('time (s)')
 
         time_vect = np.zeros(window) #np.linspace(0,1,window)
         strain_vect = np.zeros(window)
+        dl_vect = np.zeros(window)
         v1_vect = np.zeros(window)
         v2_vect = np.zeros(window)
         cap_vect = np.zeros(window)
         line11, = ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
-        line12, = ax12.plot(time_vect, v1_vect, 'o', ms=3, color='blue')
-        line21, = ax21.plot(time_vect, v2_vect, 'o', ms=3, color='red')
-        line22, = ax22.plot(time_vect, cap_vect, 'o', ms=3, color='green')
+        line12, = ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
+        line21, = ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
+        line22, = ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
         plt.tight_layout()
         fig.canvas.draw()
 
@@ -253,6 +249,7 @@ class StrainServer:
                 t_old = t_new
                 t = t_new - t0
                 new_strain = self.strain.locked_read()
+                new_dl = self.dl.locked_read()
                 new_v1 = self.voltage_1.locked_read()
                 new_v2 = self.voltage_2.locked_read()
                 new_cap = self.cap.locked_read()
@@ -261,6 +258,7 @@ class StrainServer:
                 # update plot
                 time_vect[j] = t
                 strain_vect[j] = new_strain
+                dl_vect[j] = new_dl
                 v1_vect[j] = new_v1
                 v2_vect[j] = new_v2
                 cap_vect[j] = new_cap
@@ -269,19 +267,23 @@ class StrainServer:
                 line11.set_xdata(time_vect)
                 line11.set_ydata(strain_vect)
                 line12.set_xdata(time_vect)
-                line12.set_ydata(v1_vect)
+                line12.set_ydata(dl_vect)
                 line21.set_xdata(time_vect)
-                line21.set_ydata(v2_vect)
+                line21.set_ydata(v1_vect)
                 line22.set_xdata(time_vect)
-                line22.set_ydata(cap_vect)
+                line22.set_ydata(v2_vect)
                 ax11.set_xlim(np.min(time_vect), np.max(time_vect))
                 ax12.set_xlim(np.min(time_vect), np.max(time_vect))
                 ax21.set_xlim(np.min(time_vect), np.max(time_vect))
                 ax22.set_xlim(np.min(time_vect), np.max(time_vect))
-                ax11.set_ylim(np.min(strain_vect),np.max(strain_vect)*1.2)
-                ax12.set_ylim(np.min(v1_vect),np.max(v1_vect)*1.2)
-                ax21.set_ylim(np.min(v2_vect),np.max(v2_vect)*1.2)
-                ax22.set_ylim(np.min(cap_vect),np.max(cap_vect)*1.2)
+                #ax11.autoscale(axis='y')
+                #ax12.autoscale(axis='y')
+                #ax21.autoscale(axis='y')
+                #ax22.autoscale(axis='y')
+                ax11.set_ylim(np.min(strain_vect)*0.8,np.max(strain_vect)*1.2)
+                ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
+                ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
+                ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
                 fig.suptitle(f'Setpoint: {new_sp}')
                 plt.pause(0.05)
                 fig.canvas.draw()
@@ -569,6 +571,10 @@ class StrainServer:
             response = '1'
         elif message == 'STR:?':
             response = str(self.strain.locked_read())
+        elif message == 'DL:?':
+            response = str(self.dl.locked_read())
+        elif message == 'CAP:?'
+            response = str(self.cap.locked_read())
         elif re.match(r'STR:-?[0-9]+[\.]?[0-9]*', message):
             setpoint = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[0])
             self.setpoint.locked_update(setpoint)
@@ -650,7 +656,7 @@ class StrainServer:
             self.strain_control_loop.join()
             print('\t Shut down control thread')
         print('\t Ramping voltage on all channels to 0')
-        self.set_voltage(1, 0)
+        self.set_voltage(1, 0) # change to set strain to 0 once that function is refined.
         self.set_voltage(2, 0)
         if self.strain_monitor_loop.is_alive():
             self.strain_monitor_loop.stop()
