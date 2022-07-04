@@ -384,6 +384,7 @@ class StrainServer:
         self.pid.setpoint = setpoint
 
         current_thread = threading.current_thread()
+        #t0 = time.time()
         while current_thread.stopped()==False:
 
             # update setpoint
@@ -398,6 +399,11 @@ class StrainServer:
             #print(new_voltage)
             # set the new output and get current value
             self.ps_write(new_voltage)
+            time.sleep(0.01)
+            #tf = time.time()
+            #t = tf-t0
+            #print(t)
+            #t0 = tf
 
     def ps_write(self, voltage):
         '''
@@ -610,23 +616,92 @@ class StrainServer:
         '''
         self.initialize_instruments()
 
-        self.setpoint.locked_update(0.02)
+        self.setpoint.locked_update(0.075)
 
         # start monitoring lcr meter
-        strain_read_loop = StoppableThread(target=self.start_strain_monitor)
-        strain_read_loop.start()
+        strain_monitor_loop = StoppableThread(target=self.start_strain_monitor)
+        strain_monitor_loop.start()
 
         # start control loop
-        strain_control_loop = StoppableThread(target=self.start_strain_control)
+        strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
         #control_loop = StoppableThread(target=self.start_pid, args=(self.setpoint.locked_read(),))
         strain_control_loop.start()
 
-        self.start_display()
+        # start comms
+        self.comms_loop = StoppableThread(target=self.start_comms)
+        self.comms_loop.start()
+
+        # setup plots
+        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
+        fig.set_size_inches(10, 8)
+        window = 1000
+        ax11.set_ylabel('strain (a.u.)')
+        ax11.set_xlabel('time (s)')
+        ax12.set_ylabel(r'dl ($\mu$m)')
+        ax12.set_xlabel('time (s)')
+        ax21.set_ylabel('voltage 1 (V)')
+        ax21.set_xlabel('time (s)')
+        ax22.set_ylabel('voltage 2 (V)')
+        ax22.set_xlabel('time (s)')
+
+        time_vect = np.zeros(window) #np.linspace(0,1,window)
+        strain_vect = np.zeros(window)
+        dl_vect = np.zeros(window)
+        v1_vect = np.zeros(window)
+        v2_vect = np.zeros(window)
+        cap_vect = np.zeros(window)
+
+        j = 0
+        t0 = time.time()
+        t_old = t0
+        i = 0
+        update_dt = 0.01
+        while self.run.locked_read() == True:
+
+            t_new = time.time()
+            dt = t_new - t_old
+
+            if dt>=update_dt:
+
+                t_old = t_new
+                t = t_new - t0
+                new_strain = self.strain.locked_read()
+                new_dl = self.dl.locked_read()
+                new_v1 = self.voltage_1.locked_read()
+                new_v2 = self.voltage_2.locked_read()
+                new_cap = self.cap.locked_read()
+                new_sp = self.setpoint.locked_read()
+
+                # update plot
+                time_vect[j] = t
+                strain_vect[j] = new_strain
+                dl_vect[j] = new_dl
+                v1_vect[j] = new_v1
+                v2_vect[j] = new_v2
+                cap_vect[j] = new_cap
+                j = (j + 1) % window
+
+        ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
+        ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
+        ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
+        ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
+        ax11.set_xlim(np.min(time_vect), np.max(time_vect))
+        ax12.set_xlim(np.min(time_vect), np.max(time_vect))
+        ax21.set_xlim(np.min(time_vect), np.max(time_vect))
+        ax22.set_xlim(np.min(time_vect), np.max(time_vect))
+        ax11.set_ylim(np.min(strain_vect)*0.8,np.max(strain_vect)*1.2)
+        ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
+        ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
+        ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
+        fig.suptitle(f'Setpoint: {new_sp}')
+        plt.tight_layout()
+        plt.show()
+
 
         strain_control_loop.stop()
-        strain_read_loop.stop()
+        strain_monitor_loop.stop()
         strain_control_loop.join()
-        strain_read_loop.join()
+        strain_monitor_loop.join()
 
     def do_main_loop(self):
         '''
