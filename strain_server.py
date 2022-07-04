@@ -224,13 +224,15 @@ class StrainServer:
         ax22.set_ylabel('voltage 2 (V)')
         ax22.set_xlabel('time (s)')
 
-        time_vect = np.zeros(window) #np.linspace(0,1,window)
-        strain_vect = np.zeros(window)
-        dl_vect = np.zeros(window)
-        v1_vect = np.zeros(window)
-        v2_vect = np.zeros(window)
-        cap_vect = np.zeros(window)
+        time_vect = np.empty(window) #np.linspace(0,1,window)
+        strain_vect = np.empty(window)
+        sp_vect = np.empty(window)
+        dl_vect = np.empty(window)
+        v1_vect = np.empty(window)
+        v2_vect = np.empty(window)
+        cap_vect = np.empty(window)
         line11, = ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
+        line11_sp, = ax11.plot(time_vect, sp_vect, '--', color='black')
         line12, = ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
         line21, = ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
         line22, = ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
@@ -265,14 +267,18 @@ class StrainServer:
                 # update plot
                 time_vect[j] = t
                 strain_vect[j] = new_strain
+                sp_vect[j] = new_sp
                 dl_vect[j] = new_dl
                 v1_vect[j] = new_v1
                 v2_vect[j] = new_v2
                 cap_vect[j] = new_cap
                 j = (j + 1) % window
 
+                indx = np.argsort(time_vect)
                 line11.set_xdata(time_vect)
                 line11.set_ydata(strain_vect)
+                line11_sp.set_xdata(time_vect[indx])
+                line11_sp.set_ydata(sp_vect[indx])
                 line12.set_xdata(time_vect)
                 line12.set_ydata(dl_vect)
                 line21.set_xdata(time_vect)
@@ -287,7 +293,7 @@ class StrainServer:
                 #ax12.autoscale(axis='y')
                 #ax21.autoscale(axis='y')
                 #ax22.autoscale(axis='y')
-                ax11.set_ylim(np.min(strain_vect)*0.8,np.max(strain_vect)*1.2)
+                ax11.set_ylim(min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8),max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2))
                 ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
                 ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
                 ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
@@ -295,6 +301,8 @@ class StrainServer:
                 plt.pause(0.05)
                 fig.canvas.draw()
                 fig.canvas.flush_events()
+
+        plt.close(fig)
 
     def start_comms(self):
         '''
@@ -651,12 +659,12 @@ class StrainServer:
         ax22.set_ylabel('voltage 2 (V)')
         ax22.set_xlabel('time (s)')
 
-        time_vect = np.zeros(window) #np.linspace(0,1,window)
-        strain_vect = np.zeros(window)
-        dl_vect = np.zeros(window)
-        v1_vect = np.zeros(window)
-        v2_vect = np.zeros(window)
-        cap_vect = np.zeros(window)
+        time_vect = np.empty(window) #np.linspace(0,1,window)
+        strain_vect = np.empty(window)
+        dl_vect = np.empty(window)
+        v1_vect = np.empty(window)
+        v2_vect = np.empty(window)
+        cap_vect = np.empty(window)
 
         j = 0
         t0 = time.time()
