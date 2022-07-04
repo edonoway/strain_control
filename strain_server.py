@@ -20,7 +20,7 @@ To Do:
 
 immediate: fix algorithm of set_strain()
 
-ponder making multiprocessed rather than multithreaded, at least for the control loop
+ponder making multiprocessed rather than multithreaded, at least for the control loop - after some thought, it is not clear that this is really necessary, since I've had to slow down the processing of the PID loop to allow the physical system to respond anyway. In addition, the structure of the program is currently such that any multiprocessed implementation would need to have a lot of shared memory, which likely defeats the purpose of running on multiple processes. Basically, with threading it seems like my program is plenty fast, with the longest (unpaused) PID loop turnaround times on order of 0.01s, which is the lenght of my pause (ie, I am not thread switch time limited in the program). Some further tests demonstrate that the situation is even more favorable for the monitor loops, for while loop turnaround time is on order 1e-6s, plenty fast to be updating.
 
 '''
 
@@ -384,7 +384,6 @@ class StrainServer:
         self.pid.setpoint = setpoint
 
         current_thread = threading.current_thread()
-        #t0 = time.time()
         while current_thread.stopped()==False:
 
             # update setpoint
@@ -400,10 +399,6 @@ class StrainServer:
             # set the new output and get current value
             self.ps_write(new_voltage)
             time.sleep(0.01)
-            #tf = time.time()
-            #t = tf-t0
-            #print(t)
-            #t0 = tf
 
     def ps_write(self, voltage):
         '''
