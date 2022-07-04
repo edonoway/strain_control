@@ -13,14 +13,10 @@ To Do:
 (3) expand GUI to be able to control, display PID params, etc.
 (4) add documentation
 (6) fix PID and how it interacts with rough ramp
-(7) add some feedback control to rough ramp, or an option to do so
+(7) fix set_strain() - add some feedback control to rough ramp, or an option to do so
 (10) safer socket communication, if possible, though so far it seems to be working okay.
 (14) add PID tuning
 (15) add logging
-
-immediate: fix algorithm of set_strain()
-
-ponder making multiprocessed rather than multithreaded, at least for the control loop - after some thought, it is not clear that this is really necessary, since I've had to slow down the processing of the PID loop to allow the physical system to respond anyway. In addition, the structure of the program is currently such that any multiprocessed implementation would need to have a lot of shared memory, which likely defeats the purpose of running on multiple processes. Basically, with threading it seems like my program is plenty fast, with the longest (unpaused) PID loop turnaround times on order of 0.01s, which is the lenght of my pause (ie, I am not thread switch time limited in the program). Some further tests demonstrate that the situation is even more favorable for the monitor loops, for while loop turnaround time is on order 1e-6s, plenty fast to be updating.
 
 '''
 
@@ -43,10 +39,11 @@ import re
 ##########################
 ### USER SETTINGS HERE ###
 ##########################
-global SIM, STARTING_SETPOINT, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
+global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
 SIM=True
 STARTING_SETPOINT=0
+SLEW_RATE=0.5
 P=1000
 I=100
 D=0.1
@@ -70,7 +67,7 @@ PORT = 8888
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, serversocket, setpoint, P, I, D, l0_samp, l0=68.68, sim=False):
+    def __init__(self, lcr, ps, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, sim=False):
         '''
         class constructor.
 
@@ -103,7 +100,9 @@ class StrainServer:
         v1, v2 = self.get_voltage(1), self.get_voltage(2)
         self.voltage_1 = LockedVar(v1)
         self.voltage_2 = LockedVar(v2)
-        self.pid = PID(P, I, D, setpoint=self.setpoint.locked_read())
+        self.pid = PID(p, i, d, setpoint=self.setpoint.locked_read())
+        #self.pid.sample_time = 0.01
+        self.p, self.i, self.d = [LockedVar(j) for j in self.pid.tunings]
         self.ctrl_mode = LockedVar(1)
         self.run = LockedVar(True)
         self.host = HOST
@@ -113,6 +112,8 @@ class StrainServer:
         '''
         Sets initial setting and paramters for both LCR meter and power supply.
         '''
+
+        self.set_slew_rate(SLEW_RATE)
 
         return 1
 
@@ -257,6 +258,9 @@ class StrainServer:
                 new_v2 = self.voltage_2.locked_read()
                 new_cap = self.cap.locked_read()
                 new_sp = self.setpoint.locked_read()
+                new_p = self.p.locked_read()
+                new_i = self.i.locked_read()
+                new_d = self.d.locked_read()
 
                 # update plot
                 time_vect[j] = t
@@ -287,7 +291,7 @@ class StrainServer:
                 ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
                 ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
                 ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
-                fig.suptitle(f'Setpoint: {new_sp}')
+                fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
                 plt.pause(0.05)
                 fig.canvas.draw()
                 fig.canvas.flush_events()
@@ -381,6 +385,7 @@ class StrainServer:
             v1, v2 = self.ps_read()
             v0 = v1
 
+        self.output_limits = (MIN_VOLTAGE, MAX_VOLTAGE)
         self.pid.setpoint = setpoint
 
         current_thread = threading.current_thread()
@@ -593,6 +598,13 @@ class StrainServer:
             channel = int(re.search(r'[1-2]', message)[0])
             voltage = float(re.findall(r'-?[0-9]+[\.]?[0-9]*', message)[1])
             self.set_voltage(channel, voltage) # change ps_write to specify channel as well.
+            response = '1'
+        elif re.match(r'PID:[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*', message):
+            p, i, d = [float(j) for j in re.findall(r'[0-9]+[\.]?[0-9]*', message)]
+            self.pid.tunings = (p,i,d)
+            self.p.locked_update(p)
+            self.i.locked_update(i)
+            self.d.locked_update(d)
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])

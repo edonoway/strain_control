@@ -146,7 +146,7 @@ class StrainClient:
         voltage = float(self.transmit(message))
         return voltage
 
-    def change_setpoint(self, new_setpoint):
+    def set_setpoint(self, new_setpoint):
         '''
         change target strain setpoint of control loop.
 
@@ -179,7 +179,23 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
-    def change_slew_rate(self, slew_rate):
+    def set_pid(self, p, i, d):
+        '''
+        Set PID parameters.
+
+        args:
+            - p(float):
+            - i(float):
+            - d(float):
+
+        returns:
+            - response(str):
+        '''
+        message = f'PID:{p},{i},{d}'
+        response = self.transmit(message)
+        return response
+
+    def set_slew_rate(self, slew_rate):
         '''
         change voltage ramp rate on power supply:
 
