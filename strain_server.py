@@ -15,7 +15,6 @@ To Do:
 (6) fix PID and how it interacts with rough ramp
 (7) add some feedback control to rough ramp, or an option to do so
 (10) safer socket communication, if possible, though so far it seems to be working okay.
-(12) strain depends on initial separation and length of sample. Find some good way to get this initialized.
 (14) add PID tuning
 (15) add logging
 
@@ -52,6 +51,7 @@ P=1000
 I=100
 D=0.1
 L0 = 68.68 # initial capacitor spacing
+L0_SAMP = 68.68
 
 ### LIMIT OUTPUT VOLTAGE HERE ###
 
@@ -70,7 +70,7 @@ PORT = 8888
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, serversocket, setpoint, P, I, D, l0=68.68, sim=False):
+    def __init__(self, lcr, ps, serversocket, setpoint, P, I, D, l0_samp, l0=68.68, sim=False):
         '''
         class constructor.
 
@@ -82,6 +82,8 @@ class StrainServer:
             - P(float):              proportional PID parameter
             - I(float):              integral PID parameter
             - D(float):              derivative PID parameter
+            - l0_samp(float):        initial length of sample
+            - l0(float):             initial capacitor gap
 
         returns: class instance object
         '''
@@ -90,8 +92,9 @@ class StrainServer:
         self.ps = ps
         self.serversocket = s
         self.l0 = l0
+        self.l0_samp = l0_samp
         self.sim = sim
-        strain, cap, imaginary_impedance, dl, _ = self.get_strain()
+        strain, cap, imaginary_impedance, dl = self.get_strain()
         self.strain = LockedVar(strain)
         self.setpoint = LockedVar(setpoint)
         self.cap = LockedVar(cap)
@@ -190,7 +193,7 @@ class StrainServer:
 
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
-            strain, cap, imaginary_impedance, dl, _ = self.get_strain()
+            strain, cap, imaginary_impedance, dl = self.get_strain()
             v1 = self.get_voltage(1)
             v2 = self.get_voltage(2)
             self.strain.locked_update(strain)
@@ -489,9 +492,8 @@ class StrainServer:
         cap = impedance[0]
         imaginary_impedance = impedance[1]
         dl = self.capacitance_to_dl(cap)
-        l = self.l0+dl
-        strain = dl/self.l0
-        return strain, cap, imaginary_impedance, dl, l
+        strain = dl/self.l0_samp
+        return strain, cap, imaginary_impedance, dl
 
     def capacitance_to_dl(self, capacitance):
         '''
@@ -508,7 +510,7 @@ class StrainServer:
 
         # capacitor specifications
         area = 5.95e6 # um^2
-        l0 = 68.68 # um
+        l0 = self.l0 # um
         cap_initial_value = 0.8 # pF
         response = 12e-3 # pF/um
         eps0 = 8.854e-6 # pF/um - vacuum permitivity
@@ -528,7 +530,7 @@ class StrainServer:
             - voltage(float):       estimated required voltage to achieve strain
         '''
 
-        l0 = 68.68
+        l0 = self.l0_samps
         response = 0.05 # um/V
         dl = strain*l0
         voltage = dl/response
@@ -595,7 +597,6 @@ class StrainServer:
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
             self.set_slew_rate(slew_rate)
             response = '1'
-
         elif message=='SHTDWN':
             self.run.locked_update(False)
             self.comms_loop.stop()
@@ -683,7 +684,7 @@ if __name__=='__main__':
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((HOST, PORT))
 
-            strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, l0=L0, sim=SIM)
+            strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
             # start test with command line argument '-test'
             args = sys.argv

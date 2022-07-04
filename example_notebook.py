@@ -7,6 +7,7 @@ from strain_control.strain_client import StrainClient
 sc = StrainClient()
 #sc.transmit('0.075')
 sc.start_strain_control('PID')
+sc.set_sample_length(68.68)
 sc.change_setpoint(0.07)
 sc.get_voltage(1)
 sc.get_strain()
