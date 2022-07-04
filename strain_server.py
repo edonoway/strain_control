@@ -788,7 +788,7 @@ if __name__=='__main__':
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.bind((HOST, PORT))
 
-                    strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, l0=L0, sim=SIM)
+                    strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
                     # start test with command line argument '-test'
                     args = sys.argv
