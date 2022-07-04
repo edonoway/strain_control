@@ -566,14 +566,17 @@ class StrainServer:
             response = '1'
         elif message == 'ECTRL:':
             if self.strain_control_loop.is_alive():
+                v1, v2 = self.get_voltage(1), self.get_voltage(2)
                 self.strain_control_loop.stop()
                 self.strain_control_loop.join()
+                self.set_voltage(1,v1)
+                self.set_voltage(1,v2)
             response = '1'
         elif message == 'STR:?':
             response = str(self.strain.locked_read())
         elif message == 'DL:?':
             response = str(self.dl.locked_read())
-        elif message == 'CAP:?'
+        elif message == 'CAP:?':
             response = str(self.cap.locked_read())
         elif re.match(r'STR:-?[0-9]+[\.]?[0-9]*', message):
             setpoint = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[0])
