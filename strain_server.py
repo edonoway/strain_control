@@ -34,6 +34,7 @@ import time
 import sys
 import socket
 import re
+import tkinter as tk
 
 
 ##########################
@@ -210,6 +211,9 @@ class StrainServer:
         '''
 
         print('Starting GUI display')
+
+        #window = tk.Tk()
+        #variable_display = tk.Frame()
 
         # setup plots
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)

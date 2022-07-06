@@ -1,3 +1,5 @@
 simple-pid
 PyMeasure
 pyvisa
+numpy
+matplotlib
