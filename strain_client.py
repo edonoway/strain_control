@@ -58,7 +58,7 @@ class StrainClient:
         initiate control loop on strain server.
 
         returns:
-            - response:
+            - response:     '1' if successful
 
         kwargs:
             - mode(string):     'PID', 'Set Voltage', or 'Combined'
@@ -80,7 +80,7 @@ class StrainClient:
         stop control loop on strain server.
 
         returns:
-            - response:
+            - response:     '1' if successful
         '''
 
         message = 'ECTRL:'
@@ -154,7 +154,7 @@ class StrainClient:
             - new_setpoint:     setpoint to set
 
         returns:
-            - response:
+            - response:         '1' if successful
         '''
 
         message = 'STR:'+str(new_setpoint)
@@ -170,7 +170,7 @@ class StrainClient:
             - voltage(float):   voltage to set
 
         returns:
-            - response:
+            - response:         '1' if successful
         '''
 
         if not(channel==1 or channel==2):
@@ -189,7 +189,7 @@ class StrainClient:
             - d(float):
 
         returns:
-            - response(str):
+            - response(str):            '1' if successful
         '''
         message = f'PID:{p},{i},{d}'
         response = self.transmit(message)
@@ -203,7 +203,7 @@ class StrainClient:
             - slew_rate(float):    slew rate in V/s
 
         returns:
-            - response:
+            - response:             '1' if successful
         '''
 
         message = 'VSLW:'+str(slew_rate)
@@ -212,7 +212,12 @@ class StrainClient:
 
     def shutdown_server(self):
         '''
-        Terminates strain server, correctly shutting down the system and leaving it in a stable, safe state.
+        Terminates strain server, correctly shutting down the system and leaving it in a stable, safe state (all voltages ramped to 0 and communications ports closed properly).
+
+        args: None
+
+        returns:
+            - response(str):            '1' if successful
         '''
 
         message = 'SHTDWN'

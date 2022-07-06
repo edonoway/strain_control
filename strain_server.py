@@ -11,7 +11,6 @@ To Do:
 
 (2) read temperature on lakeshore
 (3) expand GUI to be able to control, display PID params, etc.
-(4) add documentation
 (6) fix PID and how it interacts with rough ramp
 (7) fix set_strain() - add some feedback control to rough ramp, or an option to do so
 (10) safer socket communication, if possible, though so far it seems to be working okay.
