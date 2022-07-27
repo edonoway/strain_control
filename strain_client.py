@@ -10,7 +10,7 @@ global HOST, PORT
 
 ### COMMUNICATION SETTINGS ###
 HOST = 'localhost'
-PORT = 8888
+PORT = 15200
 
 ###########################
 ###########################

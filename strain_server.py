@@ -41,7 +41,7 @@ import tkinter as tk
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=True
+SIM=False
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=1000
@@ -52,14 +52,14 @@ L0_SAMP = 68.68
 
 ### LIMIT OUTPUT VOLTAGE HERE ###
 
-MAX_VOLTAGE = 119 # V
-MIN_VOLTAGE = -19 # V
+MAX_VOLTAGE = 5#119 # V
+MIN_VOLTAGE = -5#-19 # V
 
 ### COMMUNICATION SETTINGS ###
-LCR_ADDRESS = None
-PS_ADDRESS = None
+LCR_ADDRESS = 'USB0::0x2A8D::0x2F01::MY54412905::0::INSTR'
+PS_ADDRESS = 'ASRL4::INSTR'
 HOST = 'localhost'
-PORT = 8888
+PORT = 15200
 
 ###########################
 ###########################
@@ -487,11 +487,15 @@ class StrainServer:
 
     def set_slew_rate(self, slew_rate):
         '''
-        utility to set slew rate on power supply
+        utility to set slew rate on power supply on both channels
         '''
 
         print(f'Setting slew rate on power supply to {slew_rate} V/s')
-        self.ps.slew_rate.locked_update(slew_rate)
+        if SIM==True:
+            self.ps.slew_rate.locked_update(slew_rate)
+        else:
+            self.ps.slew_rate_1 = slew_rate
+            self.ps.slew_rate_2 = slew_rate
 
     def get_strain(self):
         '''
@@ -742,9 +746,9 @@ class StrainServer:
         self.comms_loop.start()
 
         # infinite loop displaying strain
-        self.start_display()
-        #while self.run.locked_read()==True:
-        #    continue
+        #self.start_display()
+        while self.run.locked_read()==True:
+            continue
 
         # close everything
         print('Shutting down strain server:')
@@ -790,20 +794,24 @@ if __name__=='__main__':
     else:
 
         # visa
-        rm = pyvisa.ResourceManager()
-        resources = rm.list_resources()
-        print(resources)
+        # rm = pyvisa.ResourceManager()
+        # resources = rm.list_resources()
+        # print(resources)
 
         with AgilentE4980(LCR_ADDRESS) as lcr:
+            print('Connected to LCR meter.')
             with razorbillRP100(PS_ADDRESS) as ps:
+                print('Connected to power supply.')
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.bind((HOST, PORT))
+                    print(f'Bound socket from host {HOST} to port {PORT}.')
 
                     strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
                     # start test with command line argument '-test'
                     args = sys.argv
-                    if args[1]=='-test':
-                        strainserver.do_test_loop()
+                    if len(args)>=2:
+                        if args[1]=='-test':
+                            strainserver.do_test_loop()
                     else:
                         strainserver.do_main_loop()
