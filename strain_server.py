@@ -35,13 +35,12 @@ import socket
 import re
 import tkinter as tk
 
-
 ##########################
 ### USER SETTINGS HERE ###
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=False
+SIM=True
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=1000
@@ -211,9 +210,6 @@ class StrainServer:
 
         print('Starting GUI display')
 
-        #window = tk.Tk()
-        #variable_display = tk.Frame()
-
         # setup plots
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         fig.set_size_inches(10, 8)
@@ -296,16 +292,29 @@ class StrainServer:
                 #ax12.autoscale(axis='y')
                 #ax21.autoscale(axis='y')
                 #ax22.autoscale(axis='y')
-                ax11.set_ylim(min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8),max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2))
-                ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
-                ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
-                ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
+                lower, upper = min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8), max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2)
+                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
+                    ax11.set_ylim(lower, upper)
+                lower, upper =np.min(dl_vect)*0.8, np.max(dl_vect)*1.2
+                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
+                    ax12.set_ylim(lower, upper)
+                lower, upper = np.min(v1_vect)*0.8 ,np.max(v1_vect)*1.2
+                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
+                    ax21.set_ylim(lower, upper)
+                lower, upper = np.min(v2_vect)*0.8, np.max(v2_vect)*1.2
+                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
+                    ax22.set_ylim(lower, upper)
                 fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
                 plt.pause(0.05)
                 fig.canvas.draw()
                 fig.canvas.flush_events()
 
         plt.close(fig)
+
+    def tkinter_gui(self):
+
+        window = tk.Tk()
+        window.mainloop()
 
     def start_comms(self):
         '''
@@ -746,9 +755,9 @@ class StrainServer:
         self.comms_loop.start()
 
         # infinite loop displaying strain
-        #self.start_display()
-        while self.run.locked_read()==True:
-            continue
+        self.start_display()
+        #while self.run.locked_read()==True:
+        #    continue
 
         # close everything
         print('Shutting down strain server:')
