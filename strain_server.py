@@ -34,6 +34,9 @@ import sys
 import socket
 import re
 import tkinter as tk
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
+#plt.switch_backend('Agg')
 
 ##########################
 ### USER SETTINGS HERE ###
@@ -210,10 +213,23 @@ class StrainServer:
 
         print('Starting GUI display')
 
+        #self.gui_thread = StoppableThread(target=self.run_gui)
+        #self.gui_thread.start()
+        #time.sleep(1)
+
         # setup plots
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         fig.set_size_inches(10, 8)
         window = 1000
+
+        #canvas = FigureCanvasTkAgg(fig, master=self.root)
+        #canvas.draw()
+        #canvas.get_tk_widget().pack()
+        #toolbar = NavigationToolbar2Tk(canvas, self.root)
+        #toolbar.update()
+        #canvas.get_tk_widget().pack()
+
+        # setup axes
         ax11.set_ylabel('strain (a.u.)')
         ax11.set_xlabel('time (s)')
         ax12.set_ylabel(r'dl ($\mu$m)')
@@ -238,13 +254,36 @@ class StrainServer:
         plt.tight_layout()
         fig.canvas.draw()
 
+        self.update_thread = StoppableThread(target=self.update_plot, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window))
+        self.update_thread.start()
+
+        while self.run==True:
+            continue
+
+    def run_gui(self):
+        '''
+        setup Tk object and run mainloop of gui root.
+        '''
+
+        self.root = tk.Tk()
+        self.root.geometry("500x500")
+
+        self.root.mainloop()
+
+    def update_plot(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window):
+        '''
+        updates GUI plot
+        '''
+
+        [[ax11, ax12], [ax21, ax22]] = axes
         j = 0
         t0 = time.time()
         t_old = t0
         i = 0
         update_dt = 0.1
 
-        while self.run.locked_read() == True:
+        current_thread = threading.current_thread()
+        while current_thread.stopped() == False:
 
             t_new = time.time()
             dt = t_new - t_old
@@ -309,12 +348,7 @@ class StrainServer:
                 fig.canvas.draw()
                 fig.canvas.flush_events()
 
-        plt.close(fig)
-
-    def tkinter_gui(self):
-
-        window = tk.Tk()
-        window.mainloop()
+            plt.close(fig)
 
     def start_comms(self):
         '''
