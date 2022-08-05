@@ -36,7 +36,7 @@ import re
 import tkinter as tk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
-#plt.switch_backend('Agg')
+plt.switch_backend('Agg')
 
 ##########################
 ### USER SETTINGS HERE ###
@@ -213,21 +213,29 @@ class StrainServer:
 
         print('Starting GUI display')
 
-        #self.gui_thread = StoppableThread(target=self.run_gui)
-        #self.gui_thread.start()
-        #time.sleep(1)
+        # define tkinter functions
+        def _quit():
+            root.quit()
+            root.destroy()
 
-        # setup plots
+        # setup tkinter window
+        root = tk.Tk()
+        root.geometry("1500x1500")
+
+        # setup buttons
+        #button = tk.Button(master=root, text="Shutdown", command=_quit)
+        #button.pack(side=tk.BOTTOM)
+
+        # setup figs
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         fig.set_size_inches(10, 8)
         window = 1000
-
-        #canvas = FigureCanvasTkAgg(fig, master=self.root)
-        #canvas.draw()
-        #canvas.get_tk_widget().pack()
-        #toolbar = NavigationToolbar2Tk(canvas, self.root)
-        #toolbar.update()
-        #canvas.get_tk_widget().pack()
+        canvas = FigureCanvasTkAgg(fig, master=root)
+        canvas.draw()
+        canvas.get_tk_widget().pack()
+        toolbar = NavigationToolbar2Tk(canvas, root)
+        toolbar.update()
+        canvas.get_tk_widget().pack()
 
         # setup axes
         ax11.set_ylabel('strain (a.u.)')
@@ -239,43 +247,43 @@ class StrainServer:
         ax22.set_ylabel('voltage 2 (V)')
         ax22.set_xlabel('time (s)')
 
-        time_vect = np.empty(window) #np.linspace(0,1,window)
-        strain_vect = np.empty(window)
-        sp_vect = np.empty(window)
-        dl_vect = np.empty(window)
-        v1_vect = np.empty(window)
-        v2_vect = np.empty(window)
-        cap_vect = np.empty(window)
+        # define plot primitives
+        time_vect = np.zeros(window)
+        strain_vect = np.zeros(window)
+        sp_vect = np.zeros(window)
+        dl_vect = np.zeros(window)
+        v1_vect = np.zeros(window)
+        v2_vect = np.zeros(window)
+        cap_vect = np.zeros(window)
         line11, = ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
         line11_sp, = ax11.plot(time_vect, sp_vect, '--', color='black')
         line12, = ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
         line21, = ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
         line22, = ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
-        plt.tight_layout()
-        fig.canvas.draw()
+        fig.tight_layout()
 
-        self.update_thread = StoppableThread(target=self.update_plot, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window))
+        # start thread to update display
+        self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas))
         self.update_thread.start()
 
-        while self.run==True:
-            continue
+        #while self.run.locked_read() == True:
+        #    continue
 
-    def run_gui(self):
-        '''
-        setup Tk object and run mainloop of gui root.
-        '''
+        # run GUI
+        root.mainloop()
 
-        self.root = tk.Tk()
-        self.root.geometry("500x500")
+        # clean up
+        self.update_thread.stop()
+        self.update_thread.join()
 
-        self.root.mainloop()
-
-    def update_plot(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window):
+    def update_display(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas):
         '''
         updates GUI plot
         '''
 
+        canvas.draw()
         [[ax11, ax12], [ax21, ax22]] = axes
+
         j = 0
         t0 = time.time()
         t_old = t0
@@ -287,9 +295,9 @@ class StrainServer:
 
             t_new = time.time()
             dt = t_new - t_old
-
             if dt>=update_dt:
 
+                # get new data
                 t_old = t_new
                 t = t_new - t0
                 new_strain = self.strain.locked_read()
@@ -302,7 +310,7 @@ class StrainServer:
                 new_i = self.i.locked_read()
                 new_d = self.d.locked_read()
 
-                # update plot
+                # update plot data
                 time_vect[j] = t
                 strain_vect[j] = new_strain
                 sp_vect[j] = new_sp
@@ -310,8 +318,6 @@ class StrainServer:
                 v1_vect[j] = new_v1
                 v2_vect[j] = new_v2
                 cap_vect[j] = new_cap
-                j = (j + 1) % window
-
                 indx = np.argsort(time_vect)
                 line11.set_xdata(time_vect)
                 line11.set_ydata(strain_vect)
@@ -323,32 +329,29 @@ class StrainServer:
                 line21.set_ydata(v1_vect)
                 line22.set_xdata(time_vect)
                 line22.set_ydata(v2_vect)
-                ax11.set_xlim(np.min(time_vect), np.max(time_vect))
-                ax12.set_xlim(np.min(time_vect), np.max(time_vect))
-                ax21.set_xlim(np.min(time_vect), np.max(time_vect))
-                ax22.set_xlim(np.min(time_vect), np.max(time_vect))
-                #ax11.autoscale(axis='y')
-                #ax12.autoscale(axis='y')
-                #ax21.autoscale(axis='y')
-                #ax22.autoscale(axis='y')
-                lower, upper = min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8), max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2)
-                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
-                    ax11.set_ylim(lower, upper)
-                lower, upper =np.min(dl_vect)*0.8, np.max(dl_vect)*1.2
-                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
-                    ax12.set_ylim(lower, upper)
-                lower, upper = np.min(v1_vect)*0.8 ,np.max(v1_vect)*1.2
-                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
-                    ax21.set_ylim(lower, upper)
-                lower, upper = np.min(v2_vect)*0.8, np.max(v2_vect)*1.2
-                if (lower!=np.nan or lower!=np.inf) and (upper!=np.nan or upper!=np.inf):
-                    ax22.set_ylim(lower, upper)
-                fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
-                plt.pause(0.05)
-                fig.canvas.draw()
-                fig.canvas.flush_events()
 
-            plt.close(fig)
+                # update axis limits
+                t_lower, t_upper = self.find_axes_limits(np.min(time_vect), np.max(time_vect))
+                s_lower, s_upper = self.find_axes_limits(min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8), max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2))
+                dl_lower, dl_upper = self.find_axes_limits(np.min(dl_vect)*0.8, np.max(dl_vect)*1.2)
+                v1_lower, v1_upper = self.find_axes_limits(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
+                v2_lower, v2_upper = self.find_axes_limits(np.min(v2_vect)*0.8, np.max(v2_vect)*1.2)
+                ax11.set_xlim(t_lower, t_upper)
+                ax12.set_xlim(t_lower, t_upper)
+                ax21.set_xlim(t_lower, t_upper)
+                ax22.set_xlim(t_lower, t_upper)
+                ax11.set_ylim(s_lower, s_upper)
+                ax12.set_ylim(dl_lower, dl_upper)
+                ax21.set_ylim(v1_lower, v1_upper)
+                ax22.set_ylim(v2_lower, v2_upper)
+
+                # update other aspects of GUI and plot changes
+                fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
+                #plt.pause(0.05)
+                canvas.draw()
+                canvas.flush_events()
+
+                j = (j + 1) % window
 
     def start_comms(self):
         '''
@@ -674,6 +677,32 @@ class StrainServer:
             response = '1'
 
         return response
+
+    def find_axes_limits(self, lower, upper):
+        """
+        helper function to obtain valid axes limits
+
+        args:
+            - lower:        lower limit
+            - upper:        upper limit
+
+        returns:
+            - lower_valid:
+            - upper_valid
+        """
+
+        lower_valid = lower
+        upper_valid = upper
+        if np.isnan(lower):
+            lower_valid = 0
+        if np.isinf(lower):
+            lower_valid = 0
+        if np.isnan(upper):
+            upper_valid = 0
+        if np.isinf(upper):
+            upper_valid = 0
+
+        return lower_valid, upper_valid
 
     def do_test_loop(self):
         '''
