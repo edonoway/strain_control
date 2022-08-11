@@ -34,6 +34,7 @@ import sys
 import socket
 import re
 import tkinter as tk
+import tkinter.ttk as ttk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
 plt.switch_backend('Agg')
@@ -134,7 +135,7 @@ class StrainServer:
         if mode==1:
 
             pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
-            print('Starting PID control.')
+            print('Starting PID control')
             pid_loop.start()
 
             current_thread = threading.current_thread()
@@ -187,6 +188,8 @@ class StrainServer:
             pid_loop.stop()
             pid_loop.join()
 
+        print('Shut down control thread')
+
     def start_strain_monitor(self):
         '''
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
@@ -206,6 +209,8 @@ class StrainServer:
             self.voltage_1.locked_update(v1)
             self.voltage_2.locked_update(v2)
 
+        print('Shut down monitor thread')
+
     def start_display(self):
         '''
         initiate plotting.
@@ -213,29 +218,36 @@ class StrainServer:
 
         print('Starting GUI display')
 
-        # define tkinter functions
-        def _quit():
-            root.quit()
-            root.destroy()
-
         # setup tkinter window
-        root = tk.Tk()
-        root.geometry("1500x1500")
+        self.root = tk.Tk()
+        self.root.geometry("1000x1000")
+
+        # setup frames for plots and displayed information
+        bg_color = '#ffd788' #'#f6b8f9'
+        frame_info = tk.Frame(master=self.root, width=100, height=100, bg=bg_color)
+        frame_info.pack(fill=tk.BOTH, side=tk.BOTTOM, expand=True)
+        frame_plot = tk.Frame(master=self.root, width=100, height=100, bg=bg_color)
+        frame_plot.pack(fill=tk.BOTH, side=tk.TOP, expand=True)
+
+        # setup labels
+        #label_setpoint
 
         # setup buttons
-        #button = tk.Button(master=root, text="Shutdown", command=_quit)
-        #button.pack(side=tk.BOTTOM)
+        button_shutdown = tk.Button(master=frame_info, text="Shutdown", command=self.quit_display)
+        button_shutdown.pack(side=tk.BOTTOM)
 
-        # setup figs
+        # setup fig into plot frame
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
         fig.set_size_inches(10, 8)
         window = 1000
-        canvas = FigureCanvasTkAgg(fig, master=root)
+        label_plot = tk.Label(master=frame_plot, text="Display")
+        label_plot.pack(side=tk.TOP)
+        canvas = FigureCanvasTkAgg(fig, master=frame_plot)
         canvas.draw()
-        canvas.get_tk_widget().pack()
-        toolbar = NavigationToolbar2Tk(canvas, root)
+        canvas.get_tk_widget().pack(side=tk.TOP)
+        toolbar = NavigationToolbar2Tk(canvas, frame_plot)
         toolbar.update()
-        canvas.get_tk_widget().pack()
+        canvas.get_tk_widget().pack(side=tk.TOP)
 
         # setup axes
         ax11.set_ylabel('strain (a.u.)')
@@ -270,16 +282,16 @@ class StrainServer:
         #    continue
 
         # run GUI
-        root.mainloop()
+        self.root.mainloop()
 
-        # clean up
-        self.update_thread.stop()
-        self.update_thread.join()
+        print('Shut down GUI display')
 
     def update_display(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas):
         '''
         updates GUI plot
         '''
+
+        print('Starting display update loop')
 
         canvas.draw()
         [[ax11, ax12], [ax21, ax22]] = axes
@@ -346,12 +358,23 @@ class StrainServer:
                 ax22.set_ylim(v2_lower, v2_upper)
 
                 # update other aspects of GUI and plot changes
-                fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
+                #fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
                 #plt.pause(0.05)
                 canvas.draw()
                 canvas.flush_events()
 
                 j = (j + 1) % window
+
+        print('Shut down display update thread')
+
+    def quit_display(self):
+
+        # stop display update loop
+        if self.update_thread.is_alive():
+            self.update_thread.stop()
+            self.update_thread.join()
+
+        self.root.quit()
 
     def start_comms(self):
         '''
@@ -392,6 +415,8 @@ class StrainServer:
                             break
             else:
                 break
+
+        print('Shut down communications thread')
 
     def set_strain(self, setpoint):
         '''
@@ -673,6 +698,7 @@ class StrainServer:
             response = '1'
         elif message=='SHTDWN':
             self.run.locked_update(False)
+            self.quit_display()
             self.comms_loop.stop()
             response = '1'
 
@@ -819,25 +845,20 @@ class StrainServer:
 
         # infinite loop displaying strain
         self.start_display()
-        #while self.run.locked_read()==True:
-        #    continue
 
         # close everything
         print('Shutting down strain server:')
         if self.strain_control_loop.is_alive():
             self.strain_control_loop.stop()
             self.strain_control_loop.join()
-            print('\t Shut down control thread')
-        print('\t Ramping voltage on all channels to 0')
+        print('Ramping voltage on all channels to 0')
         self.set_voltage(1, 0) # change to set strain to 0 once that function is refined.
         self.set_voltage(2, 0)
         if self.strain_monitor_loop.is_alive():
             self.strain_monitor_loop.stop()
             self.strain_monitor_loop.join()
-            print('\t Shut down monitor thread')
         if self.comms_loop.is_alive():
             self.comms_loop.join()
-        print('\t Shut down communications thread')
         print('Strain server shutdown complete')
 
 if __name__=='__main__':
