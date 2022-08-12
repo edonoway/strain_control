@@ -54,7 +54,7 @@ L0_SAMP = 68.68
 
 ### LIMIT OUTPUT VOLTAGE HERE ###
 
-MAX_VOLTAGE = 5#119 # V
+MAX_VOLTAGE = 119#119 # V
 MIN_VOLTAGE = -5#-19 # V
 
 ### COMMUNICATION SETTINGS ###
@@ -236,7 +236,7 @@ class StrainServer:
 
         # setup labels
         # dictionary of values to display and update
-        labels_dict = {"Unstrained Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "Sample Length (um)":self.l0_samp, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Control Status":self.ctrl_mode}
+        labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Control Status":self.ctrl_mode}
         labels_val = []
         for i, (name, var) in enumerate(labels_dict.items()):
             val = round(var.locked_read(),4)
