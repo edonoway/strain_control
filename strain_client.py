@@ -179,6 +179,20 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
+    def set_sample_l0(self, samp_l0):
+        '''
+        sets 0 strain sample length for correctly calculating strain.
+
+        args:
+            - samp_l0(float):   0 strain length of sample in microns
+
+        returns:
+            - response:         '1' if successful
+        '''
+        message = 'SAMPL0:'+str(samp_l0)
+        response = self.transmit(message)
+        return response
+
     def set_pid(self, p, i, d):
         '''
         Set PID parameters.
