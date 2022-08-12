@@ -10,7 +10,6 @@ SOME IMPORTANT SAFETY NOTES:
 To Do:
 
 (2) read temperature on lakeshore
-(3) expand GUI to be able to control, display PID params, etc.
 (6) fix PID and how it interacts with rough ramp
 (7) fix set_strain() - add some feedback control to rough ramp, or an option to do so
 (10) safer socket communication, if possible, though so far it seems to be working okay.
@@ -92,7 +91,7 @@ class StrainServer:
         self.ps = ps
         self.serversocket = s
         self.l0 = l0
-        self.l0_samp = l0_samp
+        self.l0_samp = LockedVar(l0_samp)
         self.sim = sim
         strain, cap, imaginary_impedance, dl = self.get_strain()
         self.strain = LockedVar(strain)
@@ -220,27 +219,43 @@ class StrainServer:
 
         # setup tkinter window
         self.root = tk.Tk()
-        self.root.geometry("1000x1000")
+        #self.root.geometry("1000x750")
+        self.root.columnconfigure([0,1], weight=1, minsize=100)
+        self.root.rowconfigure([0,1], weight=1, minsize=100)
 
         # setup frames for plots and displayed information
         bg_color = '#ffd788' #'#f6b8f9'
-        frame_info = tk.Frame(master=self.root, width=100, height=100, bg=bg_color)
-        frame_info.pack(fill=tk.BOTH, side=tk.BOTTOM, expand=True)
-        frame_plot = tk.Frame(master=self.root, width=100, height=100, bg=bg_color)
+        frame_left = tk.Frame(master=self.root, width=200, height=500, bg=bg_color)
+        frame_right = tk.Frame(master=self.root, width=500, height=500, bg=bg_color)
+        frame_plot = tk.Frame(master=frame_right, width=500, height=500, bg=bg_color)
+        frame_shutdown = tk.Frame(master=frame_right, width=500,height=5, bg=bg_color)
+        frame_left.pack(fill=tk.BOTH, side=tk.LEFT, expand=True)
+        frame_right.pack(fill=tk.BOTH, side=tk.LEFT, expand=True)
         frame_plot.pack(fill=tk.BOTH, side=tk.TOP, expand=True)
+        frame_shutdown.pack(fill=tk.BOTH, side=tk.TOP, expand=True)
 
         # setup labels
-        #label_setpoint
+        # dictionary of values to display and update
+        labels_dict = {"Unstrained Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "Sample Length (um)":self.l0_samp, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Control Status":self.ctrl_mode}
+        labels_val = []
+        for i, (name, var) in enumerate(labels_dict.items()):
+            val = round(var.locked_read(),4)
+            label_name = tk.Label(master=frame_left, text=f"{name}:", bg=bg_color, fg='black')
+            label_val = tk.Label(master=frame_left, text=val, bg=bg_color, fg='black')
+            labels_val.append(label_val)
+            label_name.grid(row=i, column=0)
+            label_val.grid(row=i, column=1)
 
         # setup buttons
-        button_shutdown = tk.Button(master=frame_info, text="Shutdown", command=self.quit_display)
+        button_shutdown = tk.Button(master=frame_shutdown, text="Shutdown Strain Server", command=self.shutdown)
         button_shutdown.pack(side=tk.BOTTOM)
 
         # setup fig into plot frame
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
-        fig.set_size_inches(10, 8)
+        px = 1/plt.rcParams['figure.dpi']  # pixel in inches
+        fig.set_size_inches(1000*px, 800*px)
         window = 1000
-        label_plot = tk.Label(master=frame_plot, text="Display")
+        label_plot = tk.Label(master=frame_plot, text="Display of Sample Strain, Sensor dl, and Channel 1 and 2 Voltage", bg=bg_color, fg='black')
         label_plot.pack(side=tk.TOP)
         canvas = FigureCanvasTkAgg(fig, master=frame_plot)
         canvas.draw()
@@ -275,7 +290,7 @@ class StrainServer:
         fig.tight_layout()
 
         # start thread to update display
-        self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas))
+        self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val))
         self.update_thread.start()
 
         #while self.run.locked_read() == True:
@@ -286,7 +301,49 @@ class StrainServer:
 
         print('Shut down GUI display')
 
-    def update_display(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas):
+    def start_comms(self):
+        '''
+        start listening to serversocket and respond to connect requests with typical socket communications.
+        '''
+
+        print(f'Opening communication socket on {self.host} at port {self.port}')
+
+        current_thread = threading.current_thread()
+        while True:
+            if current_thread.stopped()==False:
+                self.serversocket.listen(1)
+                print('Listening for strain client')
+                conn, addr = self.serversocket.accept()
+                with conn:
+                    #print(f'Connected to strain client at address {addr}')
+                    while True: # run main loop
+                        message = conn.recv(1024)
+                        #print('Receive from client initiated.')
+                        if not message:
+                            #print('Message received and strain client terminated connection.')
+                            break
+                        decoded_message = message.decode('utf8')
+                        try:
+                            response = self.parse_message(decoded_message)
+                        except:
+                            error_msg = 'Error: unable to parse message: '+str(message)
+                            print(error_msg)
+                            conn.sendall(error_msg.encode('utf8'))
+                            break
+                        try:
+                            #print('Transmitting response to client')
+                            conn.sendall(response.encode('utf8'))
+                        except:
+                            error_msg = 'Error: unable to transmit response to client.'
+                            print(error_msg)
+                            conn.sendall(error_msg.encode('utf8'))
+                            break
+            else:
+                break
+
+        print('Shut down communications thread')
+
+    def update_display(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val):
         '''
         updates GUI plot
         '''
@@ -357,66 +414,19 @@ class StrainServer:
                 ax21.set_ylim(v1_lower, v1_upper)
                 ax22.set_ylim(v2_lower, v2_upper)
 
-                # update other aspects of GUI and plot changes
-                #fig.suptitle(f'Setpoint: {new_sp}, PID: ({new_p}, {new_i}, {new_d})')
-                #plt.pause(0.05)
+                # update plot
+                fig.tight_layout()
                 canvas.draw()
                 canvas.flush_events()
+
+                # update labels
+                for i, (name, var) in enumerate(labels_dict.items()):
+                    val = round(var.locked_read(),4)
+                    labels_val[i]['text']=str(val)
 
                 j = (j + 1) % window
 
         print('Shut down display update thread')
-
-    def quit_display(self):
-
-        # stop display update loop
-        if self.update_thread.is_alive():
-            self.update_thread.stop()
-            self.update_thread.join()
-
-        self.root.quit()
-
-    def start_comms(self):
-        '''
-        start listening to serversocket and respond to connect requests with typical socket communications.
-        '''
-
-        print(f'Opening communication socket on {self.host} at port {self.port}')
-
-        current_thread = threading.current_thread()
-        while True:
-            if current_thread.stopped()==False:
-                self.serversocket.listen(1)
-                print('Listening for strain client')
-                conn, addr = self.serversocket.accept()
-                with conn:
-                    #print(f'Connected to strain client at address {addr}')
-                    while True: # run main loop
-                        message = conn.recv(1024)
-                        #print('Receive from client initiated.')
-                        if not message:
-                            #print('Message received and strain client terminated connection.')
-                            break
-                        decoded_message = message.decode('utf8')
-                        try:
-                            response = self.parse_message(decoded_message)
-                        except:
-                            error_msg = 'Error: unable to parse message: '+str(message)
-                            print(error_msg)
-                            conn.sendall(error_msg.encode('utf8'))
-                            break
-                        try:
-                            #print('Transmitting response to client')
-                            conn.sendall(response.encode('utf8'))
-                        except:
-                            error_msg = 'Error: unable to transmit response to client.'
-                            print(error_msg)
-                            conn.sendall(error_msg.encode('utf8'))
-                            break
-            else:
-                break
-
-        print('Shut down communications thread')
 
     def set_strain(self, setpoint):
         '''
@@ -584,7 +594,7 @@ class StrainServer:
         cap = impedance[0]
         imaginary_impedance = impedance[1]
         dl = self.capacitance_to_dl(cap)
-        strain = dl/self.l0_samp
+        strain = dl/self.l0_samp.locked_read()
         return strain, cap, imaginary_impedance, dl
 
     def capacitance_to_dl(self, capacitance):
@@ -685,6 +695,10 @@ class StrainServer:
             voltage = float(re.findall(r'-?[0-9]+[\.]?[0-9]*', message)[1])
             self.set_voltage(channel, voltage) # change ps_write to specify channel as well.
             response = '1'
+        elif re.match(r'SAMPL0:[0-9]+[\.]?[0-9]*', message):
+            samp_l0 = float(re.findall(r'[0-9]+[\.]?[0-9]*', message)[1])
+            self.l0_samp.locked_update(samp_l0)
+            response='1'
         elif re.match(r'PID:[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*', message):
             p, i, d = [float(j) for j in re.findall(r'[0-9]+[\.]?[0-9]*', message)]
             self.pid.tunings = (p,i,d)
@@ -697,9 +711,7 @@ class StrainServer:
             self.set_slew_rate(slew_rate)
             response = '1'
         elif message=='SHTDWN':
-            self.run.locked_update(False)
-            self.quit_display()
-            self.comms_loop.stop()
+            self.shutdown()
             response = '1'
 
         return response
@@ -729,6 +741,26 @@ class StrainServer:
             upper_valid = 0
 
         return lower_valid, upper_valid
+
+    def close_display(self):
+
+        # stop display update loop
+        if self.update_thread.is_alive():
+            self.update_thread.stop()
+            self.update_thread.join()
+
+        self.root.quit()
+
+    def shutdown(self):
+        '''
+        Initiates shutdown of server
+        '''
+
+        print('Shutting down strain server:')
+        self.run.locked_update(False)
+        self.close_display()
+        if self.comms_loop.is_alive():
+            self.comms_loop.stop()
 
     def do_test_loop(self):
         '''
@@ -847,7 +879,6 @@ class StrainServer:
         self.start_display()
 
         # close everything
-        print('Shutting down strain server:')
         if self.strain_control_loop.is_alive():
             self.strain_control_loop.stop()
             self.strain_control_loop.join()
