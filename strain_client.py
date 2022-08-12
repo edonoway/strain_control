@@ -179,6 +179,25 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
+    def set_voltage_limits(self, channel, min, max):
+        '''
+        sets voltage limits on channel 1 or 2
+
+        args:
+            - channel(int):     channel 1 or 2 on power supply
+            - min(float):       min voltage
+            - max(float):       max voltage
+
+        returns:
+            - response:         '1' if successful
+        '''
+
+        if not(channel==1 or channel==2):
+            raise ValueError('Invalid power supply voltage channel, please choose either 1 or 2.')
+        message = 'VLIMS'+str(channel)+':'+str(min)+','+str(max)
+        response = self.transmit(message)
+        return response
+
     def set_sample_l0(self, samp_l0):
         '''
         sets 0 strain sample length for correctly calculating strain.

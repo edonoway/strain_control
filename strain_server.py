@@ -46,7 +46,7 @@ global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE,
 SIM=True
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
-P=1000
+P=100
 I=100
 D=0.1
 L0 = 68.68 # initial capacitor spacing
@@ -102,6 +102,11 @@ class StrainServer:
         v1, v2 = self.get_voltage(1), self.get_voltage(2)
         self.voltage_1 = LockedVar(v1)
         self.voltage_2 = LockedVar(v2)
+        self.max_voltage_1 = LockedVar(MAX_VOLTAGE)
+        self.min_voltage_1 = LockedVar(MIN_VOLTAGE)
+        self.max_voltage_2 = LockedVar(MAX_VOLTAGE)
+        self.min_voltage_2 = LockedVar(MIN_VOLTAGE)
+        self.slew_rate = LockedVar(SLEW_RATE)
         self.pid = PID(p, i, d, setpoint=self.setpoint.locked_read())
         #self.pid.sample_time = 0.01
         self.p, self.i, self.d = [LockedVar(j) for j in self.pid.tunings]
@@ -236,7 +241,7 @@ class StrainServer:
 
         # setup labels
         # dictionary of values to display and update
-        labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Control Status":self.ctrl_mode}
+        labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Voltage 1 Min":self.min_voltage_1, "Voltage 1 Max":self.max_voltage_1, "Voltage 2 Min":self.min_voltage_2, "Voltage 2 Max":self.max_voltage_2, "Slew Rate":self.slew_rate, "Control Status":self.ctrl_mode}
         labels_val = []
         for i, (name, var) in enumerate(labels_dict.items()):
             val = round(var.locked_read(),4)
@@ -520,10 +525,20 @@ class StrainServer:
                 raise ValueError('channel must be int 1 or 2.')
 
             # limit max/min voltage
-            if voltage > MAX_VOLTAGE:
-                voltage = MAX_VOLTAGE
-            elif voltage < MIN_VOLTAGE:
-                voltage = MIN_VOLTAGE
+            if channel==1:
+                max = self.max_voltage_1.locked_read()
+                min = self.min_voltage_1.locked_read()
+                if voltage > max:
+                    voltage = max
+                elif voltage < min:
+                    voltage = min
+            elif channel==2:
+                max = self.max_voltage_2.locked_read()
+                min = self.min_voltage_2.locked_read()
+                if voltage > max:
+                    voltage = max
+                elif voltage < min:
+                    voltage = min
 
             # set voltages
             if self.sim==True:
@@ -577,6 +592,7 @@ class StrainServer:
         else:
             self.ps.slew_rate_1 = slew_rate
             self.ps.slew_rate_2 = slew_rate
+        self.slew_rate.locked_update(slew_rate)
 
     def get_strain(self):
         '''
@@ -695,6 +711,19 @@ class StrainServer:
             voltage = float(re.findall(r'-?[0-9]+[\.]?[0-9]*', message)[1])
             self.set_voltage(channel, voltage) # change ps_write to specify channel as well.
             response = '1'
+        elif re.match(r'VLIMS[1-2]:-?[0-9]+[\.]?[0-9]*,-?[0-9]+[\.]?[0-9]*',message):
+            channel = int(re.search(r'[1-2]', message)[0])
+            min, max = [float(i) for i in re.findall(r'-?[0-9]+[\.]?[0-9]*', message)[1:]]
+            if channel==1:
+                self.min_voltage_1.locked_update(min)
+                self.max_voltage_1.locked_update(max)
+                response = '1'
+            elif channel==2:
+                self.min_voltage_2.locked_update(min)
+                self.max_voltage_2.locked_update(max)
+                response = '1'
+            else:
+                response = 'Invalid channel'
         elif re.match(r'SAMPL0:[0-9]+[\.]?[0-9]*', message):
             samp_l0 = float(re.findall(r'[0-9]+[\.]?[0-9]*', message)[1])
             self.l0_samp.locked_update(samp_l0)
