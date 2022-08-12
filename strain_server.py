@@ -32,11 +32,8 @@ import time
 import sys
 import socket
 import re
-import tkinter as tk
-import tkinter.ttk as ttk
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
-plt.switch_backend('Agg')
+from PyQt5 import QtWidgets
+import pyqtgraph as pg
 
 ##########################
 ### USER SETTINGS HERE ###
@@ -222,23 +219,16 @@ class StrainServer:
 
         print('Starting GUI display')
 
-        # setup tkinter window
-        self.root = tk.Tk()
-        self.root.columnconfigure([0,1], weight=1, minsize=100)
-        self.root.rowconfigure([0,1], weight=1, minsize=100)
+        # setup qt window
+        self.app = QtWidgets.QApplication([])
+        self.root = QtWidgets   .QWidget()
+
 
         # setup frames for plots and displayed information
         bg_color = '#ffd788' #'#f6b8f9'
-        frame_left = tk.Frame(master=self.root, width=200, height=500, bg=bg_color)
-        frame_right = tk.Frame(master=self.root, width=500, height=500, bg=bg_color)
-        frame_plot = tk.Frame(master=frame_right, width=500, height=500, bg=bg_color)
-        frame_shutdown = tk.Frame(master=frame_right, width=500,height=5, bg=bg_color)
-        frame_left.pack(fill=tk.BOTH, side=tk.LEFT, expand=True)
-        frame_right.pack(fill=tk.BOTH, side=tk.LEFT, expand=True)
-        frame_plot.pack(fill=tk.BOTH, side=tk.TOP, expand=True)
-        frame_shutdown.pack(fill=tk.BOTH, side=tk.TOP, expand=True)
 
         # setup labels
+        """
         # dictionary of values to display and update
         labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Voltage 1 Min":self.min_voltage_1, "Voltage 1 Max":self.max_voltage_1, "Voltage 2 Min":self.min_voltage_2, "Voltage 2 Max":self.max_voltage_2, "Slew Rate":self.slew_rate, "Control Status":self.ctrl_mode}
         labels_val = []
@@ -297,8 +287,11 @@ class StrainServer:
         self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val))
         self.update_thread.start()
 
+        """
+
         # run GUI
-        self.root.mainloop()
+        self.root.show()
+        self.app.exec_()
 
         print('Shut down GUI display')
 

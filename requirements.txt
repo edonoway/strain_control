@@ -2,4 +2,5 @@ simple-pid
 PyMeasure
 pyvisa
 numpy
-matplotlib
+pyqtgraph
+pyqt5
