@@ -739,8 +739,9 @@ class StrainServer:
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
             self.set_slew_rate(slew_rate)
             response = '1'
-        elif message=='SHTDWN':
-            self.shutdown()
+        elif re.match(r'SHTDWN:[0-1]', message):
+            mode = int(re.search(r'[0-1]', message)[0])
+            self.shutdown(mode)
             response = '1'
 
         return response
@@ -780,16 +781,34 @@ class StrainServer:
 
         self.root.quit()
 
-    def shutdown(self):
+    def shutdown(self, mode):
         '''
-        Initiates shutdown of server
+        Initiates shutdown of server.
+
+        args:
+            - mode(int):        0 to leave state of system as is, or 1 to ramp voltages down to 0.
+
+        returns: None
         '''
 
         print('Shutting down strain server:')
-        self.run.locked_update(False)
-        self.close_display()
         if self.comms_loop.is_alive():
             self.comms_loop.stop()
+        if mode==1:
+            print('Ramping voltage on all channels to 0')
+            self.set_voltage(1, 0)
+            self.set_voltage(2, 0)
+            eps = 0.1
+            while (np.abs(self.get_voltage(1)) >= eps) or (np.abs(self.get_voltage(1)) >= eps):
+                continue
+        if self.strain_control_loop.is_alive():
+            self.strain_control_loop.stop()
+            self.strain_control_loop.join()
+        if self.strain_monitor_loop.is_alive():
+            self.strain_monitor_loop.stop()
+            self.strain_monitor_loop.join()
+        self.close_display()
+        self.run.locked_update(False)
 
     def do_test_loop(self):
         '''
@@ -904,19 +923,10 @@ class StrainServer:
         self.comms_loop = StoppableThread(target=self.start_comms)
         self.comms_loop.start()
 
-        # infinite loop displaying strain
+        # infinite loop display
         self.start_display()
 
-        # close everything
-        if self.strain_control_loop.is_alive():
-            self.strain_control_loop.stop()
-            self.strain_control_loop.join()
-        print('Ramping voltage on all channels to 0')
-        self.set_voltage(1, 0) # change to set strain to 0 once that function is refined.
-        self.set_voltage(2, 0)
-        if self.strain_monitor_loop.is_alive():
-            self.strain_monitor_loop.stop()
-            self.strain_monitor_loop.join()
+        # join comm loop
         if self.comms_loop.is_alive():
             self.comms_loop.join()
         print('Strain server shutdown complete')

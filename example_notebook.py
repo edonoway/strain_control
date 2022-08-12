@@ -11,13 +11,13 @@ sc.set_setpoint(0.08)
 sc.get_voltage(2)
 sc.get_strain()
 sc.get_cap()
-sc.set_slew_rate(10)
-sc.set_voltage(1,3)
-sc.set_voltage_limits(1, -5,119)
+sc.set_slew_rate(1)
+sc.set_voltage(1,50)
+sc.set_voltage_limits(2, -5,119)
 sc.set_pid(100,100,0.1)
 sc.set_sample_l0(68)
 sc.stop_strain_control()
-sc.shutdown_server()
+sc.shutdown_server(0)
 
 import re
 message = 'VLIMS1:-12,120'

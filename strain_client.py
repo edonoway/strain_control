@@ -243,16 +243,19 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
-    def shutdown_server(self):
+    def shutdown_server(self, mode=1):
         '''
-        Terminates strain server, correctly shutting down the system and leaving it in a stable, safe state (all voltages ramped to 0 and communications ports closed properly).
-
-        args: None
+        Terminates strain server, correctly shutting down the system and leaving it in a stable, safe state (by default, all voltages ramped to 0 and communications ports closed properly).
 
         returns:
             - response(str):            '1' if successful
+
+        kwargs:
+            -mode(int):                1 to ramp voltages down to 0 and 0 to leave state of system as is.
         '''
 
-        message = 'SHTDWN'
+        if not(mode==0 or mode==1):
+            raise ValueError('Invalid shutdown mode. Please input either 0 to leave system in current state or 1 to ramp voltages to 0.')
+        message = f'SHTDWN:{mode}'
         response = self.transmit(message)
         return response
