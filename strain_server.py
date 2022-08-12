@@ -8,13 +8,13 @@ SOME IMPORTANT SAFETY NOTES:
 - wire both the power supply and the capacitor correctly by rereading appropriate sections in the manual
 
 To Do:
-
+(1) add logging
 (2) read temperature on lakeshore
-(6) fix PID and how it interacts with rough ramp
-(7) fix set_strain() - add some feedback control to rough ramp, or an option to do so
-(10) safer socket communication, if possible, though so far it seems to be working okay.
-(14) add PID tuning
-(15) add logging
+
+As time allows:
+(3) Change global variables to configuration file.
+(4) fix PID and how it interacts with rough ramp
+(5) fix set_strain() - add some feedback control to rough ramp, or an option to do so
 
 '''
 
@@ -810,99 +810,6 @@ class StrainServer:
         self.close_display()
         self.run.locked_update(False)
 
-    def do_test_loop(self):
-        '''
-        This test is meant to illustrate the usage of this package.
-        '''
-        self.initialize_instruments()
-
-        self.setpoint.locked_update(0.075)
-
-        # start monitoring lcr meter
-        strain_monitor_loop = StoppableThread(target=self.start_strain_monitor)
-        strain_monitor_loop.start()
-
-        # start control loop
-        strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
-        #control_loop = StoppableThread(target=self.start_pid, args=(self.setpoint.locked_read(),))
-        strain_control_loop.start()
-
-        # start comms
-        self.comms_loop = StoppableThread(target=self.start_comms)
-        self.comms_loop.start()
-
-        # setup plots
-        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
-        fig.set_size_inches(10, 8)
-        window = 1000
-        ax11.set_ylabel('strain (a.u.)')
-        ax11.set_xlabel('time (s)')
-        ax12.set_ylabel(r'dl ($\mu$m)')
-        ax12.set_xlabel('time (s)')
-        ax21.set_ylabel('voltage 1 (V)')
-        ax21.set_xlabel('time (s)')
-        ax22.set_ylabel('voltage 2 (V)')
-        ax22.set_xlabel('time (s)')
-
-        time_vect = np.empty(window) #np.linspace(0,1,window)
-        strain_vect = np.empty(window)
-        dl_vect = np.empty(window)
-        v1_vect = np.empty(window)
-        v2_vect = np.empty(window)
-        cap_vect = np.empty(window)
-
-        j = 0
-        t0 = time.time()
-        t_old = t0
-        i = 0
-        update_dt = 0.01
-        while self.run.locked_read() == True:
-
-            t_new = time.time()
-            dt = t_new - t_old
-
-            if dt>=update_dt:
-
-                t_old = t_new
-                t = t_new - t0
-                new_strain = self.strain.locked_read()
-                new_dl = self.dl.locked_read()
-                new_v1 = self.voltage_1.locked_read()
-                new_v2 = self.voltage_2.locked_read()
-                new_cap = self.cap.locked_read()
-                new_sp = self.setpoint.locked_read()
-
-                # update plot
-                time_vect[j] = t
-                strain_vect[j] = new_strain
-                dl_vect[j] = new_dl
-                v1_vect[j] = new_v1
-                v2_vect[j] = new_v2
-                cap_vect[j] = new_cap
-                j = (j + 1) % window
-
-        ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
-        ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
-        ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
-        ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
-        ax11.set_xlim(np.min(time_vect), np.max(time_vect))
-        ax12.set_xlim(np.min(time_vect), np.max(time_vect))
-        ax21.set_xlim(np.min(time_vect), np.max(time_vect))
-        ax22.set_xlim(np.min(time_vect), np.max(time_vect))
-        ax11.set_ylim(np.min(strain_vect)*0.8,np.max(strain_vect)*1.2)
-        ax12.set_ylim(np.min(dl_vect)*0.8,np.max(dl_vect)*1.2)
-        ax21.set_ylim(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
-        ax22.set_ylim(np.min(v2_vect)*0.8,np.max(v2_vect)*1.2)
-        fig.suptitle(f'Setpoint: {new_sp}')
-        plt.tight_layout()
-        plt.show()
-
-
-        strain_control_loop.stop()
-        strain_monitor_loop.stop()
-        strain_control_loop.join()
-        strain_monitor_loop.join()
-
     def do_main_loop(self):
         '''
         Main loop. Starts listening to client server for various commands, starting and closing threads as necessary.
@@ -946,13 +853,7 @@ if __name__=='__main__':
 
             strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
-            # start test with command line argument '-test'
-            args = sys.argv
-            if len(args)>=2:
-                if args[1]=='-test':
-                    strainserver.do_test_loop()
-            else:
-                strainserver.do_main_loop()
+            strainserver.do_main_loop()
 
     else:
 
@@ -971,10 +872,4 @@ if __name__=='__main__':
 
                     strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
-                    # start test with command line argument '-test'
-                    args = sys.argv
-                    if len(args)>=2:
-                        if args[1]=='-test':
-                            strainserver.do_test_loop()
-                    else:
-                        strainserver.do_main_loop()
+                    strainserver.do_main_loop()
