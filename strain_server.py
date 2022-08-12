@@ -224,7 +224,6 @@ class StrainServer:
 
         # setup tkinter window
         self.root = tk.Tk()
-        #self.root.geometry("1000x750")
         self.root.columnconfigure([0,1], weight=1, minsize=100)
         self.root.rowconfigure([0,1], weight=1, minsize=100)
 
@@ -252,8 +251,8 @@ class StrainServer:
             label_val.grid(row=i, column=1)
 
         # setup buttons
-        button_shutdown = tk.Button(master=frame_shutdown, text="Shutdown Strain Server", command=self.shutdown)
-        button_shutdown.pack(side=tk.BOTTOM)
+        #button_shutdown = tk.Button(master=frame_shutdown, text="Shutdown Strain Server", command=self.shutdown)
+        #button_shutdown.pack(side=tk.BOTTOM)
 
         # setup fig into plot frame
         fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
@@ -297,9 +296,6 @@ class StrainServer:
         # start thread to update display
         self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val))
         self.update_thread.start()
-
-        #while self.run.locked_read() == True:
-        #    continue
 
         # run GUI
         self.root.mainloop()
@@ -832,6 +828,8 @@ class StrainServer:
 
         # infinite loop display
         self.start_display()
+        #while self.run.locked_read()==True:
+        #    continue
 
         # join comm loop
         if self.comms_loop.is_alive():
