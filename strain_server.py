@@ -32,8 +32,8 @@ import time
 import sys
 import socket
 import re
-from PyQt5 import QtWidgets
 import pyqtgraph as pg
+from pyqtgraph import QtCore, QtWidgets
 
 ##########################
 ### USER SETTINGS HERE ###
@@ -220,55 +220,51 @@ class StrainServer:
         print('Starting GUI display')
 
         # setup qt window
-        self.app = QtWidgets.QApplication([])
-        self.root = QtWidgets   .QWidget()
-
-
-        # setup frames for plots and displayed information
+        pg.setConfigOptions(antialias=True)
         bg_color = '#ffd788' #'#f6b8f9'
+        self.app = QtWidgets.QApplication([])
+        self.root = QtWidgets.QWidget()
+        self.root.setWindowTitle('Strain Server')
+        self.root.setStyleSheet(f'color:black; background-color:{bg_color}')
+
+        # setup layouts
+        layout = QtWidgets.QHBoxLayout()
+        layout_left = QtWidgets.QGridLayout()
+        layout_right = QtWidgets.QVBoxLayout()
+        layout.addLayout(layout_left)
+        layout.addLayout(layout_right)
 
         # setup labels
-        """
-        # dictionary of values to display and update
         labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Voltage 1 Min":self.min_voltage_1, "Voltage 1 Max":self.max_voltage_1, "Voltage 2 Min":self.min_voltage_2, "Voltage 2 Max":self.max_voltage_2, "Slew Rate":self.slew_rate, "Control Status":self.ctrl_mode}
         labels_val = []
         for i, (name, var) in enumerate(labels_dict.items()):
             val = round(var.locked_read(),4)
-            label_name = tk.Label(master=frame_left, text=f"{name}:", bg=bg_color, fg='black')
-            label_val = tk.Label(master=frame_left, text=val, bg=bg_color, fg='black')
+            label_name = QtWidgets.QLabel(f"{name}:")
+            label_val = QtWidgets.QLabel(f"{val}")
             labels_val.append(label_val)
-            label_name.grid(row=i, column=0)
-            label_val.grid(row=i, column=1)
+            layout_left.addWidget(label_name, i, 0)
+            layout_left.addWidget(label_val, i, 1)
 
-        # setup buttons
-        #button_shutdown = tk.Button(master=frame_shutdown, text="Shutdown Strain Server", command=self.shutdown)
-        #button_shutdown.pack(side=tk.BOTTOM)
-
-        # setup fig into plot frame
-        fig, [[ax11, ax12], [ax21, ax22]] = plt.subplots(2,2)
-        px = 1/plt.rcParams['figure.dpi']  # pixel in inches
-        fig.set_size_inches(1000*px, 800*px)
-        window = 1000
-        label_plot = tk.Label(master=frame_plot, text="Display of Sample Strain, Sensor dl, and Channel 1 and 2 Voltage", bg=bg_color, fg='black')
-        label_plot.pack(side=tk.TOP)
-        canvas = FigureCanvasTkAgg(fig, master=frame_plot)
-        canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP)
-        toolbar = NavigationToolbar2Tk(canvas, frame_plot)
-        toolbar.update()
-        canvas.get_tk_widget().pack(side=tk.TOP)
+        # setup subplots
+        plots = pg.GraphicsLayoutWidget()
+        plots.setBackground('w')
+        layout_right.addWidget(plots)
+        p11 = plots.addPlot()
+        p12 = plots.addPlot()
+        plots.nextRow()
+        p21 = plots.addPlot()
+        p22 = plots.addPlot()
 
         # setup axes
-        ax11.set_ylabel('strain (a.u.)')
-        ax11.set_xlabel('time (s)')
-        ax12.set_ylabel(r'dl ($\mu$m)')
-        ax12.set_xlabel('time (s)')
-        ax21.set_ylabel('voltage 1 (V)')
-        ax21.set_xlabel('time (s)')
-        ax22.set_ylabel('voltage 2 (V)')
-        ax22.set_xlabel('time (s)')
+        for p in [p11,p12,p21,p22]:
+            p.setLabel('bottom', 'time', units='s')
+        p11.setLabel('left', 'strain (a.u.)')
+        p12.setLabel('left', r'dl ($\mu$m)')
+        p21.setLabel('left', 'voltage 1 (V)')
+        p22.setLabel('left', 'voltage 2 (V)')
 
         # define plot primitives
+        window = 10000
         time_vect = np.zeros(window)
         strain_vect = np.zeros(window)
         sp_vect = np.zeros(window)
@@ -276,24 +272,33 @@ class StrainServer:
         v1_vect = np.zeros(window)
         v2_vect = np.zeros(window)
         cap_vect = np.zeros(window)
-        line11, = ax11.plot(time_vect, strain_vect, 'o', ms=3, color='orange')
-        line11_sp, = ax11.plot(time_vect, sp_vect, '--', color='black')
-        line12, = ax12.plot(time_vect, dl_vect, 'o', ms=3, color='blue')
-        line21, = ax21.plot(time_vect, v1_vect, 'o', ms=3, color='red')
-        line22, = ax22.plot(time_vect, v2_vect, 'o', ms=3, color='green')
-        fig.tight_layout()
+        """
+        line11 = p11.plot(time_vect, strain_vect, pen=None, symbolBrush='orange', symbol='o',symbolSize=5)
+        line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=3, style=QtCore.Qt.DashLine))
+        line12 = p12.plot(time_vect, dl_vect, pen=None, symbolBrush='blue', symbol='o', symbolSize=5)
+        line21 = p21.plot(time_vect, v1_vect, pen=None, symbolBrush='red', symbol='o', symbolSize=5)
+        line22 = p22.plot(time_vect, v2_vect, pen=None, symbolBrush='green', symbol='o', symbolSize=5)
+        """
+        line11 = p11.plot(time_vect, strain_vect, pen=pg.mkPen('orange', width=4))
+        line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
+        line12 = p12.plot(time_vect, dl_vect, pen=pg.mkPen('blue', width=4))
+        line21 = p21.plot(time_vect, v1_vect, pen=pg.mkPen('red', width=4))
+        line22 = p22.plot(time_vect, v2_vect, pen=pg.mkPen('green', width=4))
 
         # start thread to update display
-        self.update_thread = StoppableThread(target=self.update_display, args=(fig, [[ax11, ax12], [ax21, ax22]], time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val))
+        self.update_thread = StoppableThread(target=self.update_display, args=(p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val))
         self.update_thread.start()
 
-        """
-
         # run GUI
+        self.root.setLayout(layout)
         self.root.show()
-        self.app.exec_()
+        self.app.exec()
 
         print('Shut down GUI display')
+
+        # for safety, check if run condition still true and shutdown if true
+        if self.run.locked_read()==True:
+            self.shutdown(1)
 
     def start_comms(self):
         '''
@@ -337,21 +342,18 @@ class StrainServer:
 
         print('Shut down communications thread')
 
-    def update_display(self, fig, axes, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, canvas, labels_dict, labels_val):
+    def update_display(self, p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val):
         '''
         updates GUI plot
         '''
 
         print('Starting display update loop')
 
-        canvas.draw()
-        [[ax11, ax12], [ax21, ax22]] = axes
-
         j = 0
         t0 = time.time()
         t_old = t0
         i = 0
-        update_dt = 0.1
+        update_dt = 0.01
 
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
@@ -373,6 +375,7 @@ class StrainServer:
                 new_i = self.i.locked_read()
                 new_d = self.d.locked_read()
 
+
                 # update plot data
                 time_vect[j] = t
                 strain_vect[j] = new_strain
@@ -382,16 +385,11 @@ class StrainServer:
                 v2_vect[j] = new_v2
                 cap_vect[j] = new_cap
                 indx = np.argsort(time_vect)
-                line11.set_xdata(time_vect)
-                line11.set_ydata(strain_vect)
-                line11_sp.set_xdata(time_vect[indx])
-                line11_sp.set_ydata(sp_vect[indx])
-                line12.set_xdata(time_vect)
-                line12.set_ydata(dl_vect)
-                line21.set_xdata(time_vect)
-                line21.set_ydata(v1_vect)
-                line22.set_xdata(time_vect)
-                line22.set_ydata(v2_vect)
+                line11.setData(time_vect[indx], strain_vect[indx])
+                line11_sp.setData(time_vect[indx], sp_vect[indx])
+                line12.setData(time_vect[indx], dl_vect[indx])
+                line21.setData(time_vect[indx], v1_vect[indx])
+                line22.setData(time_vect[indx], v2_vect[indx])
 
                 # update axis limits
                 t_lower, t_upper = self.find_axes_limits(np.min(time_vect), np.max(time_vect))
@@ -399,24 +397,17 @@ class StrainServer:
                 dl_lower, dl_upper = self.find_axes_limits(np.min(dl_vect)*0.8, np.max(dl_vect)*1.2)
                 v1_lower, v1_upper = self.find_axes_limits(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
                 v2_lower, v2_upper = self.find_axes_limits(np.min(v2_vect)*0.8, np.max(v2_vect)*1.2)
-                ax11.set_xlim(t_lower, t_upper)
-                ax12.set_xlim(t_lower, t_upper)
-                ax21.set_xlim(t_lower, t_upper)
-                ax22.set_xlim(t_lower, t_upper)
-                ax11.set_ylim(s_lower, s_upper)
-                ax12.set_ylim(dl_lower, dl_upper)
-                ax21.set_ylim(v1_lower, v1_upper)
-                ax22.set_ylim(v2_lower, v2_upper)
-
-                # update plot
-                fig.tight_layout()
-                canvas.draw()
-                canvas.flush_events()
+                for p in [p11, p12, p21, p22]:
+                    p.setXRange(t_lower, t_upper)
+                p11.setYRange(s_lower, s_upper)
+                p12.setYRange(dl_lower, dl_upper)
+                p21.setYRange(v1_lower, v1_upper)
+                p22.setYRange(v2_lower, v2_upper)
 
                 # update labels
                 for i, (name, var) in enumerate(labels_dict.items()):
                     val = round(var.locked_read(),4)
-                    labels_val[i]['text']=str(val)
+                    labels_val[i].setText(str(val))
 
                 j = (j + 1) % window
 
@@ -762,13 +753,16 @@ class StrainServer:
         return lower_valid, upper_valid
 
     def close_display(self):
+        '''
+        closes the display safely.
+        '''
 
         # stop display update loop
         if self.update_thread.is_alive():
             self.update_thread.stop()
             self.update_thread.join()
 
-        self.root.quit()
+        self.app.quit()
 
     def shutdown(self, mode):
         '''
@@ -781,8 +775,10 @@ class StrainServer:
         '''
 
         print('Shutting down strain server:')
+        self.run.locked_update(False)
         if self.comms_loop.is_alive():
             self.comms_loop.stop()
+            # can't join because we might be in it!
         if mode==1:
             print('Ramping voltage on all channels to 0')
             self.set_voltage(1, 0)
@@ -797,7 +793,6 @@ class StrainServer:
             self.strain_monitor_loop.stop()
             self.strain_monitor_loop.join()
         self.close_display()
-        self.run.locked_update(False)
 
     def do_main_loop(self):
         '''
@@ -824,8 +819,9 @@ class StrainServer:
         #while self.run.locked_read()==True:
         #    continue
 
-        # join comm loop
+        # join comm loop if it hasn't already been stopped. There is an issue here because unless the program is shut down by a comms event, the comms loop will be hung up listening...hmmm
         if self.comms_loop.is_alive():
+            self.comms_loop.stop()
             self.comms_loop.join()
         print('Strain server shutdown complete')
 
