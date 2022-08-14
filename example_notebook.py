@@ -17,7 +17,7 @@ sc.set_voltage_limits(2, -5,119)
 sc.set_pid(100,100,0.1)
 sc.set_sample_l0(68)
 sc.stop_strain_control()
-sc.shutdown_server(1)
+sc.shutdown_server(0)
 
 import re
 message = 'VLIMS1:-12,120'

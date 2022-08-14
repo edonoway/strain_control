@@ -257,6 +257,7 @@ class StrainServer:
 
         # setup axes
         for p in [p11,p12,p21,p22]:
+            p.disableAutoRange()
             p.setLabel('bottom', 'time', units='s')
         p11.setLabel('left', 'strain (a.u.)')
         p12.setLabel('left', r'dl ($\mu$m)')
@@ -349,67 +350,65 @@ class StrainServer:
 
         print('Starting display update loop')
 
-        j = 0
-        t0 = time.time()
-        t_old = t0
-        i = 0
-        update_dt = 0.01
+        time_vect_local, strain_vect_local, sp_vect_local, dl_vect_local, v1_vect_local, v2_vect_local, cap_vect_local = time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect
 
+        t0 = time.time()
+        j = 0
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
 
-            t_new = time.time()
-            dt = t_new - t_old
-            if dt>=update_dt:
+            t_start = time.time()
 
-                # get new data
-                t_old = t_new
-                t = t_new - t0
-                new_strain = self.strain.locked_read()
-                new_dl = self.dl.locked_read()
-                new_v1 = self.voltage_1.locked_read()
-                new_v2 = self.voltage_2.locked_read()
-                new_cap = self.cap.locked_read()
-                new_sp = self.setpoint.locked_read()
-                new_p = self.p.locked_read()
-                new_i = self.i.locked_read()
-                new_d = self.d.locked_read()
+            # get new data
+            new_strain = self.strain.locked_read()
+            new_dl = self.dl.locked_read()
+            new_v1 = self.voltage_1.locked_read()
+            new_v2 = self.voltage_2.locked_read()
+            new_cap = self.cap.locked_read()
+            new_sp = self.setpoint.locked_read()
+            new_p = self.p.locked_read()
+            new_i = self.i.locked_read()
+            new_d = self.d.locked_read()
 
 
-                # update plot data
-                time_vect[j] = t
-                strain_vect[j] = new_strain
-                sp_vect[j] = new_sp
-                dl_vect[j] = new_dl
-                v1_vect[j] = new_v1
-                v2_vect[j] = new_v2
-                cap_vect[j] = new_cap
-                indx = np.argsort(time_vect)
-                line11.setData(time_vect[indx], strain_vect[indx])
-                line11_sp.setData(time_vect[indx], sp_vect[indx])
-                line12.setData(time_vect[indx], dl_vect[indx])
-                line21.setData(time_vect[indx], v1_vect[indx])
-                line22.setData(time_vect[indx], v2_vect[indx])
+            # update plot data
+            time_vect_local[j] = t_start - t0
+            strain_vect_local[j] = new_strain
+            sp_vect_local[j] = new_sp
+            dl_vect_local[j] = new_dl
+            v1_vect_local[j] = new_v1
+            v2_vect_local[j] = new_v2
+            cap_vect_local[j] = new_cap
+            indx = np.argsort(time_vect_local)
+            line11.setData(time_vect_local[indx], strain_vect_local[indx])
+            line11_sp.setData(time_vect_local[indx], sp_vect_local[indx])
+            line12.setData(time_vect_local[indx], dl_vect_local[indx])
+            line21.setData(time_vect_local[indx], v1_vect_local[indx])
+            line22.setData(time_vect_local[indx], v2_vect_local[indx])
 
-                # update axis limits
-                t_lower, t_upper = self.find_axes_limits(np.min(time_vect), np.max(time_vect))
-                s_lower, s_upper = self.find_axes_limits(min(np.min(strain_vect)*0.8, np.min(sp_vect)*0.8), max(np.max(sp_vect)*1.2, np.max(strain_vect)*1.2))
-                dl_lower, dl_upper = self.find_axes_limits(np.min(dl_vect)*0.8, np.max(dl_vect)*1.2)
-                v1_lower, v1_upper = self.find_axes_limits(np.min(v1_vect)*0.8,np.max(v1_vect)*1.2)
-                v2_lower, v2_upper = self.find_axes_limits(np.min(v2_vect)*0.8, np.max(v2_vect)*1.2)
-                for p in [p11, p12, p21, p22]:
-                    p.setXRange(t_lower, t_upper)
-                p11.setYRange(s_lower, s_upper)
-                p12.setYRange(dl_lower, dl_upper)
-                p21.setYRange(v1_lower, v1_upper)
-                p22.setYRange(v2_lower, v2_upper)
+            # update axis limits
+            t_lower, t_upper = self.find_axes_limits(np.min(time_vect_local), np.max(time_vect_local))
+            s_lower, s_upper = self.find_axes_limits(min(np.min(strain_vect_local)*0.8, np.min(sp_vect_local)*0.8), max(np.max(sp_vect_local)*1.2, np.max(strain_vect_local)*1.2))
+            dl_lower, dl_upper = self.find_axes_limits(np.min(dl_vect_local)*0.8, np.max(dl_vect_local)*1.2)
+            v1_lower, v1_upper = self.find_axes_limits(np.min(v1_vect_local)*0.8,np.max(v1_vect_local)*1.2)
+            v2_lower, v2_upper = self.find_axes_limits(np.min(v2_vect_local)*0.8, np.max(v2_vect_local)*1.2)
+            for p in [p11, p12, p21, p22]:
+                p.setXRange(t_lower, t_upper)
+            p11.setYRange(s_lower, s_upper)
+            p12.setYRange(dl_lower, dl_upper)
+            p21.setYRange(v1_lower, v1_upper)
+            p22.setYRange(v2_lower, v2_upper)
 
-                # update labels
-                for i, (name, var) in enumerate(labels_dict.items()):
-                    val = round(var.locked_read(),4)
-                    labels_val[i].setText(str(val))
+            # update labels
+            for i, (name, var) in enumerate(labels_dict.items()):
+                val = round(var.locked_read(),4)
+                labels_val[i].setText(str(val))
 
-                j = (j + 1) % window
+            j = (j + 1) % window
+
+            #t_end = time.time()
+            #print(t_end-t_start)
+            #time.sleep(0.1)
 
         print('Shut down display update thread')
 
