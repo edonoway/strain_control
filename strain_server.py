@@ -18,7 +18,7 @@ As time allows:
 
 '''
 
-from threading_classes import LockedVar, StoppableThread
+from threading_classes import LockedVar, StoppableThread, StoppableProcess, queue_write
 from simulation import SimulatedLCR, SimulatedPS
 from pymeasure.instruments.agilent import AgilentE4980
 from pymeasure.instruments.razorbill import razorbillRP100
@@ -26,6 +26,8 @@ import pyvisa
 from simple_pid import PID
 from threading import Thread, Lock, Event
 import threading
+import multiprocessing as mp
+from multiprocessing import Queue
 import matplotlib.pyplot as plt
 import numpy as np
 import time
@@ -63,6 +65,171 @@ PORT = 15200
 ###########################
 ###########################
 ###########################
+
+def start_display(queues):
+    '''
+    initiate plotting.
+
+    args:
+      -queue(mp.Queue):       a queue pip for receiving updated data
+    '''
+
+    print('Starting GUI display')
+
+    # setup qt window
+    pg.setConfigOptions(antialias=True)
+    bg_color = '#ffd788' #'#f6b8f9'
+    app = QtWidgets.QApplication([])
+    root = QtWidgets.QWidget()
+    root.setWindowTitle('Strain Server')
+    root.setStyleSheet(f'color:black; background-color:{bg_color}')
+
+    # setup layouts
+    layout = QtWidgets.QHBoxLayout()
+    layout_left = QtWidgets.QGridLayout()
+    layout_right = QtWidgets.QVBoxLayout()
+    layout.addLayout(layout_left)
+    layout.addLayout(layout_right)
+
+    # setup labels
+    [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, p_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q] = queues
+    labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
+    labels_val = []
+    for i, (name, q) in enumerate(labels_dict.items()):
+        val = round(queue_read(q),4)
+        label_name = QtWidgets.QLabel(f"{name}:")
+        label_val = QtWidgets.QLabel(f"{val}")
+        labels_val.append(label_val)
+        layout_left.addWidget(label_name, i, 0)
+        layout_left.addWidget(label_val, i, 1)
+
+    # setup subplots
+    plots = pg.GraphicsLayoutWidget()
+    plots.setBackground('w')
+    layout_right.addWidget(plots)
+    p11 = plots.addPlot()
+    p12 = plots.addPlot()
+    plots.nextRow()
+    p21 = plots.addPlot()
+    p22 = plots.addPlot()
+
+    # setup axes
+    for p in [p11,p12,p21,p22]:
+        p.disableAutoRange()
+        p.setLabel('bottom', 'time', units='s')
+    p11.setLabel('left', 'strain (a.u.)')
+    p12.setLabel('left', r'dl ($\mu$m)')
+    p21.setLabel('left', 'voltage 1 (V)')
+    p22.setLabel('left', 'voltage 2 (V)')
+
+    # define plot primitives
+    window = 10000
+    time_vect = np.zeros(window)
+    strain_vect = np.zeros(window)
+    sp_vect = np.zeros(window)
+    dl_vect = np.zeros(window)
+    v1_vect = np.zeros(window)
+    v2_vect = np.zeros(window)
+    cap_vect = np.zeros(window)
+    """
+    line11 = p11.plot(time_vect, strain_vect, pen=None, symbolBrush='orange', symbol='o',symbolSize=5)
+    line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=3, style=QtCore.Qt.DashLine))
+    line12 = p12.plot(time_vect, dl_vect, pen=None, symbolBrush='blue', symbol='o', symbolSize=5)
+    line21 = p21.plot(time_vect, v1_vect, pen=None, symbolBrush='red', symbol='o', symbolSize=5)
+    line22 = p22.plot(time_vect, v2_vect, pen=None, symbolBrush='green', symbol='o', symbolSize=5)
+    """
+    line11 = p11.plot(time_vect, strain_vect, pen=pg.mkPen('orange', width=4))
+    line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
+    line12 = p12.plot(time_vect, dl_vect, pen=pg.mkPen('blue', width=4))
+    line21 = p21.plot(time_vect, v1_vect, pen=pg.mkPen('red', width=4))
+    line22 = p22.plot(time_vect, v2_vect, pen=pg.mkPen('green', width=4))
+
+    # start thread to update display
+    update_thread = StoppableThread(target=update_display, args=(p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val))
+    update_thread.start()
+
+    # run GUI
+    root.setLayout(layout)
+    root.show()
+    app.exec()
+
+    print('Shut down GUI display')
+
+    # for safety, check if run condition still true and shutdown if true
+    #if self.run.get()==True:
+    #    self.shutdown(1)
+
+def update_display(p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val):
+    '''
+    updates GUI plot
+    '''
+
+    print('Starting display update loop')
+
+    time_vect_local, strain_vect_local, sp_vect_local, dl_vect_local, v1_vect_local, v2_vect_local, cap_vect_local = time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect
+
+    values = np.zeros(len(labels_val))
+
+    t0 = time.time()
+    j = 0
+    current_thread = threading.current_thread()
+    while current_thread.stopped() == False:
+
+        t_start = time.time()
+
+        # update labels
+        for i, (name, q) in enumerate(labels_dict.items()):
+            val = queue_read(q)
+            values[i] = val
+            labels_val[i].setText(round(str(val),4))
+
+        # get new data
+        # strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, p_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q
+        new_strain = values[0]
+        new_dl = values[3]
+        new_v1 = values[5]
+        new_v2 = values[6]
+        new_cap = values[2]
+        new_sp = values[1]
+        new_p = values[7]
+        new_i = values[8]
+        new_d = values[9]
+
+        # update plot data
+        time_vect_local[j] = t_start - t0
+        strain_vect_local[j] = new_strain
+        sp_vect_local[j] = new_sp
+        dl_vect_local[j] = new_dl
+        v1_vect_local[j] = new_v1
+        v2_vect_local[j] = new_v2
+        cap_vect_local[j] = new_cap
+        indx = np.argsort(time_vect_local)
+        line11.setData(time_vect_local[indx], strain_vect_local[indx])
+        line11_sp.setData(time_vect_local[indx], sp_vect_local[indx])
+        line12.setData(time_vect_local[indx], dl_vect_local[indx])
+        line21.setData(time_vect_local[indx], v1_vect_local[indx])
+        line22.setData(time_vect_local[indx], v2_vect_local[indx])
+
+        # update axis limits
+        t_lower, t_upper = self.find_axes_limits(np.min(time_vect_local), np.max(time_vect_local))
+        s_lower, s_upper = self.find_axes_limits(min(np.min(strain_vect_local)*0.8, np.min(sp_vect_local)*0.8), max(np.max(sp_vect_local)*1.2, np.max(strain_vect_local)*1.2))
+        dl_lower, dl_upper = self.find_axes_limits(np.min(dl_vect_local)*0.8, np.max(dl_vect_local)*1.2)
+        v1_lower, v1_upper = self.find_axes_limits(np.min(v1_vect_local)*0.8,np.max(v1_vect_local)*1.2)
+        v2_lower, v2_upper = self.find_axes_limits(np.min(v2_vect_local)*0.8, np.max(v2_vect_local)*1.2)
+        for p in [p11, p12, p21, p22]:
+            p.setXRange(t_lower, t_upper)
+        p11.setYRange(s_lower, s_upper)
+        p12.setYRange(dl_lower, dl_upper)
+        p21.setYRange(v1_lower, v1_upper)
+        p22.setYRange(v2_lower, v2_upper)
+
+        j = (j + 1) % window
+
+        #t_end = time.time()
+        #print(t_end-t_start)
+        #time.sleep(0.1)
+
+    print('Shut down display update thread')
 
 class StrainServer:
 
@@ -111,6 +278,28 @@ class StrainServer:
         self.run = LockedVar(True)
         self.host = HOST
         self.port = PORT
+
+        # setup queues
+        values = [strain, setpoint, cap, dl, l0_samp, v1, v2, p, i, d, MIN_VOLTAGE, MIN_VOLTAGE, MAX_VOLTAGE, MAX_VOLTAGE, SLEW_RATE, self.ctrl_mode.locked_read()]
+        self.strain_q = Queue()
+        self.setpoint_q = Queue()
+        self.cap_q = Queue()
+        self.dl_q = Queue()
+        self.l0_samp_q = Queue()
+        self.voltage_1_q = Queue()
+        self.voltage_2_q = Queue()
+        self.p_q = Queue()
+        self.i_q = Queue()
+        self.d_q = Queue()
+        self.min_voltage_1_q = Queue()
+        self.min_voltage_2_q = Queue()
+        self.max_voltage_1_q = Queue()
+        self.max_voltage_2_q = Queue()
+        self.slew_rate_q = Queue()
+        self.ctrl_mode_q = Queue()
+        self.queues = [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q]
+        for ii, q in enumerate(self.queues):
+            q.put(values[ii])
 
     def initialize_instruments(self):
         '''
@@ -210,22 +399,32 @@ class StrainServer:
             self.voltage_1.locked_update(v1)
             self.voltage_2.locked_update(v2)
 
+            # update queues
+            queues = [self.strain_q, self.cap_q, self.dl_q, self.voltage_1_q, self.voltage_2_q]
+            vars = [strain, cap, dl, v1, v2]
+            for ii, q in enumerate(queues):
+                queue_write(q, vars[ii])
+
         print('Shut down monitor thread')
 
     def start_display(self):
         '''
         initiate plotting.
+
+        args:
+          -queue(mp.Queue):       a queue pip for receiving updated data
         '''
 
         print('Starting GUI display')
+        queues = self.queues
 
         # setup qt window
         pg.setConfigOptions(antialias=True)
         bg_color = '#ffd788' #'#f6b8f9'
-        self.app = QtWidgets.QApplication([])
-        self.root = QtWidgets.QWidget()
-        self.root.setWindowTitle('Strain Server')
-        self.root.setStyleSheet(f'color:black; background-color:{bg_color}')
+        app = QtWidgets.QApplication([])
+        root = QtWidgets.QWidget()
+        root.setWindowTitle('Strain Server')
+        root.setStyleSheet(f'color:black; background-color:{bg_color}')
 
         # setup layouts
         layout = QtWidgets.QHBoxLayout()
@@ -235,10 +434,11 @@ class StrainServer:
         layout.addLayout(layout_right)
 
         # setup labels
-        labels_dict = {"Sample Length (um)":self.l0_samp, "Setpoint":self.setpoint, "Strain":self.strain, "Capacitance (pF)":self.cap, "dL (um)":self.dl, "Voltage 1 (V)":self.voltage_1, "Voltage 2 (V)":self.voltage_2, "P":self.p, "I":self.i, "D":self.d, "Voltage 1 Min":self.min_voltage_1, "Voltage 1 Max":self.max_voltage_1, "Voltage 2 Min":self.min_voltage_2, "Voltage 2 Max":self.max_voltage_2, "Slew Rate":self.slew_rate, "Control Status":self.ctrl_mode}
+        [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, p_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q] = queues
+        labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
         labels_val = []
-        for i, (name, var) in enumerate(labels_dict.items()):
-            val = round(var.locked_read(),4)
+        for i, (name, q) in enumerate(labels_dict.items()):
+            val = round(queue_read(q),4)
             label_name = QtWidgets.QLabel(f"{name}:")
             label_val = QtWidgets.QLabel(f"{val}")
             labels_val.append(label_val)
@@ -291,15 +491,15 @@ class StrainServer:
         self.update_thread.start()
 
         # run GUI
-        self.root.setLayout(layout)
-        self.root.show()
-        self.app.exec()
+        root.setLayout(layout)
+        root.show()
+        app.exec()
 
         print('Shut down GUI display')
 
         # for safety, check if run condition still true and shutdown if true
-        if self.run.locked_read()==True:
-            self.shutdown(1)
+        #if self.run.get()==True:
+        #    self.shutdown(1)
 
     def start_comms(self):
         '''
@@ -352,6 +552,8 @@ class StrainServer:
 
         time_vect_local, strain_vect_local, sp_vect_local, dl_vect_local, v1_vect_local, v2_vect_local, cap_vect_local = time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect
 
+        values = np.zeros(len(labels_val))
+
         t0 = time.time()
         j = 0
         current_thread = threading.current_thread()
@@ -359,17 +561,23 @@ class StrainServer:
 
             t_start = time.time()
 
-            # get new data
-            new_strain = self.strain.locked_read()
-            new_dl = self.dl.locked_read()
-            new_v1 = self.voltage_1.locked_read()
-            new_v2 = self.voltage_2.locked_read()
-            new_cap = self.cap.locked_read()
-            new_sp = self.setpoint.locked_read()
-            new_p = self.p.locked_read()
-            new_i = self.i.locked_read()
-            new_d = self.d.locked_read()
+            # update labels
+            for i, (name, q) in enumerate(labels_dict.items()):
+                val = queue_read(q)
+                values[i] = val
+                labels_val[i].setText(round(str(val),4))
 
+            # get new data
+            # strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, p_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q
+            new_strain = values[0]
+            new_dl = values[3]
+            new_v1 = values[5]
+            new_v2 = values[6]
+            new_cap = values[2]
+            new_sp = values[1]
+            new_p = values[7]
+            new_i = values[8]
+            new_d = values[9]
 
             # update plot data
             time_vect_local[j] = t_start - t0
@@ -398,11 +606,6 @@ class StrainServer:
             p12.setYRange(dl_lower, dl_upper)
             p21.setYRange(v1_lower, v1_upper)
             p22.setYRange(v2_lower, v2_upper)
-
-            # update labels
-            for i, (name, var) in enumerate(labels_dict.items()):
-                val = round(var.locked_read(),4)
-                labels_val[i].setText(str(val))
 
             j = (j + 1) % window
 
@@ -572,6 +775,7 @@ class StrainServer:
             self.ps.slew_rate_1 = slew_rate
             self.ps.slew_rate_2 = slew_rate
         self.slew_rate.locked_update(slew_rate)
+        queue_write(self.slew_rate_q, slew_rate)
 
     def get_strain(self):
         '''
@@ -651,6 +855,7 @@ class StrainServer:
                 if mode!=current_mode:
                     print(f'Stopping control thread in mode {current_mode} and restarting in mode {mode}')
                     self.ctrl_mode.locked_update(mode)
+                    queue_write(self.ctrl_mode, mode)
                     self.strain_control_loop.stop()
                     self.strain_control_loop.join()
                     self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
@@ -660,6 +865,7 @@ class StrainServer:
             else:
                 print(f'Starting control thread in mode {mode}')
                 self.ctrl_mode.locked_update(mode)
+                queue_write(self.ctrl_mode, mode)
                 self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
                 self.strain_control_loop.start()
             response = '1'
@@ -680,6 +886,7 @@ class StrainServer:
         elif re.match(r'STR:-?[0-9]+[\.]?[0-9]*', message):
             setpoint = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[0])
             self.setpoint.locked_update(setpoint)
+            queue_write(self.setpoint_q, setpoint)
             response = '1'
         elif re.match(r'VOL[1-2]:\?', message):
             channel = int(re.search(r'[1-2]', message)[0])
@@ -696,16 +903,21 @@ class StrainServer:
             if channel==1:
                 self.min_voltage_1.locked_update(min)
                 self.max_voltage_1.locked_update(max)
+                queue_write(self.min_voltage_1_q, min)
+                queue_write(self.max_voltage_1_q, max)
                 response = '1'
             elif channel==2:
                 self.min_voltage_2.locked_update(min)
                 self.max_voltage_2.locked_update(max)
+                queue_write(self.min_voltage_2_q, min)
+                queue_write(self.max_voltage_2_q, max)
                 response = '1'
             else:
                 response = 'Invalid channel'
         elif re.match(r'SAMPL0:[0-9]+[\.]?[0-9]*', message):
             samp_l0 = float(re.findall(r'[0-9]+[\.]?[0-9]*', message)[1])
             self.l0_samp.locked_update(samp_l0)
+            queue_write(self.l0_samp, samp_l0)
             response='1'
         elif re.match(r'PID:[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*', message):
             p, i, d = [float(j) for j in re.findall(r'[0-9]+[\.]?[0-9]*', message)]
@@ -713,6 +925,9 @@ class StrainServer:
             self.p.locked_update(p)
             self.i.locked_update(i)
             self.d.locked_update(d)
+            queu_write(self.p, p)
+            queu_write(self.i, i)
+            queu_write(self.d, d)
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
@@ -814,7 +1029,9 @@ class StrainServer:
         self.comms_loop.start()
 
         # infinite loop display
-        self.start_display()
+        self.display_process = mp.Process(target=self.start_display)
+        self.display_process.start()
+        self.display_process.join()
         #while self.run.locked_read()==True:
         #    continue
 
