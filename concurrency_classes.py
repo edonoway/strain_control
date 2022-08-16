@@ -12,8 +12,8 @@ def queue_write(q, message):
     helper function that takes in a Queue object, clears the contents of the Queue and then rewrites to it in a thread and process safe manner.
     '''
 
-    #with q.mutex:
-    #q.queue.clear()
+    while not q.empty():
+        q.get()
     q.put(message)
 
 def queue_read(q):
@@ -21,7 +21,6 @@ def queue_read(q):
     helper function that takes in a Queue object, reads the contents, and then puts the message back so that future calls can still read the value. Thread and process safe.
     '''
 
-    #with q.mutex:
     val = q.get()
     q.put(val)
     return val
@@ -58,25 +57,3 @@ class StoppableThread(Thread):
 
     def stopped(self):
         return self._stop_event.is_set()
-
-class StoppableProcess(mp.Process):
-    '''
-    Process class with a stop() method. the process itself has to check regularly for the stopped() condition.
-    '''
-
-    def __init__(self,  *args, **kwargs):
-        super(StoppableProcess, self).__init__(*args, **kwargs)
-        self._stop_event = mp.Event()
-
-    def stop(self):
-        self._stop_event.set()
-
-    def stopped(self):
-        return self._stop_event.is_set()
-
-#test = queue.Queue()
-#test.put(1)
-#with test.mutex:
-#    test.queue.clear()
-#    test.put(2)
-    #test.get()

@@ -2,7 +2,7 @@
 classes and methods for simulating the strain control system, mainly for testing code.
 '''
 
-from threading_classes import LockedVar, StoppableThread
+from concurrency_classes import LockedVar, StoppableThread
 import threading
 import time
 
