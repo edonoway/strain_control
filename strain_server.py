@@ -66,198 +66,6 @@ PORT = 15200
 ###########################
 ###########################
 
-## display functions must be out of the class for multiprocessing.
-
-def start_display(queues):
-    '''
-    initiate plotting.
-
-    args:
-      -queue(mp.Queue):       a queue pip for receiving updated data
-    '''
-
-    print('Starting GUI display')
-
-    # unpack queues
-    [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
-
-    # setup qt window
-    pg.setConfigOptions(antialias=True)
-    bg_color = '#ffd788' #'#f6b8f9'
-    app = QtWidgets.QApplication([])
-    root = QtWidgets.QWidget()
-    root.setWindowTitle('Strain Server')
-    root.setStyleSheet(f'color:black; background-color:{bg_color}')
-
-    # setup layouts
-    layout = QtWidgets.QHBoxLayout()
-    layout_left = QtWidgets.QGridLayout()
-    layout_right = QtWidgets.QVBoxLayout()
-    layout.addLayout(layout_left)
-    layout.addLayout(layout_right)
-
-    # setup labels to queue dictionary and initialize
-    labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i_q, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
-    labels_val = []
-    for i, (name, q) in enumerate(labels_dict.items()):
-        val = round(float(queue_read(q)),4)
-        label_name = QtWidgets.QLabel(f"{name}:")
-        label_val = QtWidgets.QLabel(f"{val}")
-        labels_val.append(label_val)
-        layout_left.addWidget(label_name, i, 0)
-        layout_left.addWidget(label_val, i, 1)
-
-    # setup subplots
-    plots = pg.GraphicsLayoutWidget()
-    plots.setBackground('w')
-    layout_right.addWidget(plots)
-    p11 = plots.addPlot()
-    p12 = plots.addPlot()
-    plots.nextRow()
-    p21 = plots.addPlot()
-    p22 = plots.addPlot()
-
-    # setup axes
-    for p in [p11,p12,p21,p22]:
-        p.disableAutoRange()
-        p.setLabel('bottom', 'time', units='s')
-    p11.setLabel('left', 'strain (a.u.)')
-    p12.setLabel('left', r'dl ($\mu$m)')
-    p21.setLabel('left', 'voltage 1 (V)')
-    p22.setLabel('left', 'voltage 2 (V)')
-
-    # define plot primitives
-    window = 10000
-    time_vect = np.zeros(window)
-    strain_vect = np.zeros(window)
-    sp_vect = np.zeros(window)
-    dl_vect = np.zeros(window)
-    v1_vect = np.zeros(window)
-    v2_vect = np.zeros(window)
-    cap_vect = np.zeros(window)
-    """
-    line11 = p11.plot(time_vect, strain_vect, pen=None, symbolBrush='orange', symbol='o',symbolSize=5)
-    line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=3, style=QtCore.Qt.DashLine))
-    line12 = p12.plot(time_vect, dl_vect, pen=None, symbolBrush='blue', symbol='o', symbolSize=5)
-    line21 = p21.plot(time_vect, v1_vect, pen=None, symbolBrush='red', symbol='o', symbolSize=5)
-    line22 = p22.plot(time_vect, v2_vect, pen=None, symbolBrush='green', symbol='o', symbolSize=5)
-    """
-    line11 = p11.plot(time_vect, strain_vect, pen=pg.mkPen('orange', width=4))
-    line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
-    line12 = p12.plot(time_vect, dl_vect, pen=pg.mkPen('blue', width=4))
-    line21 = p21.plot(time_vect, v1_vect, pen=pg.mkPen('red', width=4))
-    line22 = p22.plot(time_vect, v2_vect, pen=pg.mkPen('green', width=4))
-
-    # start thread to update display
-    update_thread = Thread(target=update_display, args=(p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val, run_q, app))
-    update_thread.start()
-
-    # run GUI
-    root.setLayout(layout)
-    root.show()
-    app.exec()
-
-    print('Shut down GUI display')
-
-    # for safety, check if run condition still true and shutdown if true
-    #if self.run.get()==True:
-    #    self.shutdown(1)
-
-def update_display(p11, p12, p21, p22, time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect, line11, line11_sp, line12, line21, line22, window, labels_dict, labels_val, run_q, app):
-    '''
-    updates GUI plot
-    '''
-
-    print('Starting display update loop')
-
-    time_vect_local, strain_vect_local, sp_vect_local, dl_vect_local, v1_vect_local, v2_vect_local, cap_vect_local = time_vect, strain_vect, sp_vect, dl_vect, v1_vect, v2_vect, cap_vect
-
-    values = np.zeros(len(labels_val))
-
-    t0 = time.time()
-    j = 0
-    while queue_read(run_q) == True:
-
-        t_start = time.time()
-
-        # update labels
-        for i, (name, q) in enumerate(labels_dict.items()):
-            val = queue_read(q)
-            values[i] = val
-            labels_val[i].setText(str(round(float(val),4)))
-
-        # get new data
-        # labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i_q, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
-        new_strain = values[2]
-        new_dl = values[4]
-        new_v1 = values[5]
-        new_v2 = values[6]
-        new_cap = values[3]
-        new_sp = values[1]
-
-        # update plot data
-        time_vect_local[j] = t_start - t0
-        strain_vect_local[j] = new_strain
-        sp_vect_local[j] = new_sp
-        dl_vect_local[j] = new_dl
-        v1_vect_local[j] = new_v1
-        v2_vect_local[j] = new_v2
-        cap_vect_local[j] = new_cap
-        indx = np.argsort(time_vect_local)
-        line11.setData(time_vect_local[indx], strain_vect_local[indx])
-        line11_sp.setData(time_vect_local[indx], sp_vect_local[indx])
-        line12.setData(time_vect_local[indx], dl_vect_local[indx])
-        line21.setData(time_vect_local[indx], v1_vect_local[indx])
-        line22.setData(time_vect_local[indx], v2_vect_local[indx])
-
-        # update axis limits
-        t_lower, t_upper = find_axes_limits(np.min(time_vect_local), np.max(time_vect_local))
-        s_lower, s_upper = find_axes_limits(min(np.min(strain_vect_local)*0.8, np.min(sp_vect_local)*0.8), max(np.max(sp_vect_local)*1.2, np.max(strain_vect_local)*1.2))
-        dl_lower, dl_upper = find_axes_limits(np.min(dl_vect_local)*0.8, np.max(dl_vect_local)*1.2)
-        v1_lower, v1_upper = find_axes_limits(np.min(v1_vect_local)*0.8,np.max(v1_vect_local)*1.2)
-        v2_lower, v2_upper = find_axes_limits(np.min(v2_vect_local)*0.8, np.max(v2_vect_local)*1.2)
-        for p in [p11, p12, p21, p22]:
-            p.setXRange(t_lower, t_upper)
-        p11.setYRange(s_lower, s_upper)
-        p12.setYRange(dl_lower, dl_upper)
-        p21.setYRange(v1_lower, v1_upper)
-        p22.setYRange(v2_lower, v2_upper)
-
-        j = (j + 1) % window
-
-        #t_end = time.time()
-        #print(t_end-t_start)
-        time.sleep(0.1)
-
-    print('Shut down display update thread')
-    app.quit()
-
-def find_axes_limits(lower, upper):
-    """
-    helper function to obtain valid axes limits
-
-    args:
-        - lower:        lower limit
-        - upper:        upper limit
-
-    returns:
-        - lower_valid:
-        - upper_valid
-    """
-
-    lower_valid = lower
-    upper_valid = upper
-    if np.isnan(lower):
-        lower_valid = 0
-    if np.isinf(lower):
-        lower_valid = 0
-    if np.isnan(upper):
-        upper_valid = 0
-    if np.isinf(upper):
-        upper_valid = 0
-
-    return lower_valid, upper_valid
-
 class StrainServer:
 
     def __init__(self, lcr, ps, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, sim=False):
@@ -415,6 +223,8 @@ class StrainServer:
             state_values = [strain, cap, dl, v1, v2]
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
+
+            time.sleep(0.1)
 
         print('Shut down monitor thread')
 
@@ -866,17 +676,204 @@ class StrainServer:
         self.comms_loop.start()
 
         # infinite loop display
-        self.display_process = mp.Process(target=start_display, args=(queues,))
+        display = StrainDisplay(queues)
+        self.display_process = mp.Process(target=display.start_display)
         self.display_process.start()
         self.display_process.join()
-        #while self.run.locked_read()==True:
-        #    continue
 
         # join comm loop if it hasn't already been stopped. There is an issue here because unless the program is shut down by a comms event, the comms loop will be hung up listening...hmmm
         if self.comms_loop.is_alive():
             self.comms_loop.stop()
             self.comms_loop.join()
         print('Strain server shutdown complete')
+
+class StrainDisplay:
+
+    def __init__(self, queues):
+
+        # unpack queues
+        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.run_q] = queues
+        # setup dictionaries
+        self.labels_dict = {"Sample Length (um)":self.l0_samp_q, "Setpoint":self.setpoint_q, "Strain":self.strain_q, "Capacitance (pF)":self.cap_q, "dL (um)":self.dl_q, "Voltage 1 (V)":self.voltage_1_q, "Voltage 2 (V)":self.voltage_2_q, "P":self.p_q, "I":self.i_q, "D":self.d_q, "Voltage 1 Min":self.min_voltage_1_q, "Voltage 1 Max":self.max_voltage_1_q, "Voltage 2 Min":self.min_voltage_2_q, "Voltage 2 Max":self.max_voltage_2_q, "Slew Rate":self.slew_rate_q, "Control Status":self.ctrl_mode_q}
+        self.labels_val = []
+        self.window=1000
+
+    def start_display(self):
+        '''
+        initiate plotting.
+        '''
+
+        print('Starting GUI display')
+
+        # setup qt window
+        pg.setConfigOptions(antialias=True)
+        bg_color = '#ffd788' #'#f6b8f9'
+        self.app = QtWidgets.QApplication([])
+        self.root = QtWidgets.QWidget()
+        self.root.setWindowTitle('Strain Server')
+        self.root.setStyleSheet(f'color:black; background-color:{bg_color}')
+
+        # setup layouts
+        spacing=20
+        layout = QtWidgets.QHBoxLayout()
+        layout_left = QtWidgets.QGridLayout()
+        layout_right = QtWidgets.QVBoxLayout()
+        layout_left.setSpacing(spacing)
+        layout_right.setSpacing(spacing)
+        layout.addLayout(layout_left)
+        layout.addLayout(layout_right)
+
+        # setup labels to queue dictionary and initialize
+        for i, (name, q) in enumerate(self.labels_dict.items()):
+            val = round(float(queue_read(q)),4)
+            label_name = QtWidgets.QLabel(f"{name}:")
+            label_val = QtWidgets.QLabel(f"{val}")
+            self.labels_val.append(label_val)
+            layout_left.addWidget(label_name, i, 0)
+            layout_left.addWidget(label_val, i, 1)
+
+        # setup plots
+        plots = pg.GraphicsLayoutWidget(size=(1,1))
+        plots.setBackground('w')
+        layout_right.addWidget(plots)
+        self.p11 = plots.addPlot()
+        self.p12 = plots.addPlot()
+        plots.nextRow()
+        self.p21 = plots.addPlot()
+        self.p22 = plots.addPlot()
+
+        # setup axes
+        for p in [self.p11,self.p12,self.p21,self.p22]:
+            p.disableAutoRange()
+            p.setLabel('bottom', 'time (s)')
+        self.p11.setLabel('left', 'strain (a.u.)')
+        self.p12.setLabel('left', r'dl ($\mu$m)')
+        self.p21.setLabel('left', 'voltage 1 (V)')
+        self.p22.setLabel('left', 'voltage 2 (V)')
+
+        # define plot primitives
+        self.time_vect = np.zeros(self.window)
+        self.strain_vect = np.zeros(self.window)
+        self.sp_vect = np.zeros(self.window)
+        self.dl_vect = np.zeros(self.window)
+        self.v1_vect = np.zeros(self.window)
+        self.v2_vect = np.zeros(self.window)
+        self.cap_vect = np.zeros(self.window)
+        """
+        line11 = p11.plot(time_vect, strain_vect, pen=None, symbolBrush='orange', symbol='o',symbolSize=5)
+        line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=3, style=QtCore.Qt.DashLine))
+        line12 = p12.plot(time_vect, dl_vect, pen=None, symbolBrush='blue', symbol='o', symbolSize=5)
+        line21 = p21.plot(time_vect, v1_vect, pen=None, symbolBrush='red', symbol='o', symbolSize=5)
+        line22 = p22.plot(time_vect, v2_vect, pen=None, symbolBrush='green', symbol='o', symbolSize=5)
+        """
+        self.line11 = self.p11.plot(self.time_vect, self.strain_vect, pen=pg.mkPen('orange', width=4))
+        self.line11_sp = self.p11.plot(self.time_vect, self.sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
+        self.line12 = self.p12.plot(self.time_vect, self.dl_vect, pen=pg.mkPen('blue', width=4))
+        self.line21 = self.p21.plot(self.time_vect, self.v1_vect, pen=pg.mkPen('red', width=4))
+        self.line22 = self.p22.plot(self.time_vect, self.v2_vect, pen=pg.mkPen('green', width=4))
+
+        # start thread to update display
+        self.t0 = time.time()
+        self.j = 0
+        timer = QtCore.QTimer()
+        timer.timeout.connect(self.update_display)
+        print('Starting display update loop')
+        timer.start(50)
+
+        # run GUI
+        self.root.setLayout(layout)
+        self.root.show()
+        self.app.exec()
+
+        print('Shut down GUI display')
+
+        # for safety, check if run condition still true and shutdown if true
+        #if self.run.get()==True:
+        #    self.shutdown(1)
+
+    def update_display(self):
+        '''
+        updates GUI plot
+        '''
+
+        values = np.zeros(len(self.labels_val))
+
+        t_start = time.time()
+
+        # update labels
+        for i, (name, q) in enumerate(self.labels_dict.items()):
+            val = queue_read(q)
+            values[i] = val
+            self.labels_val[i].setText(str(round(float(val),4)))
+
+        # get new data
+        # labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i_q, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
+        new_strain = values[2]
+        new_dl = values[4]
+        new_v1 = values[5]
+        new_v2 = values[6]
+        new_cap = values[3]
+        new_sp = values[1]
+
+        # update plot data
+        self.time_vect[self.j] = t_start -self.t0
+        self.strain_vect[self.j] = new_strain
+        self.sp_vect[self.j] = new_sp
+        self.dl_vect[self.j] = new_dl
+        self.v1_vect[self.j] = new_v1
+        self.v2_vect[self.j] = new_v2
+        self.cap_vect[self.j] = new_cap
+        indx = np.argsort(self.time_vect)
+        self.line11.setData(self.time_vect[indx], self.strain_vect[indx])
+        self.line11_sp.setData(self.time_vect[indx], self.sp_vect[indx])
+        self.line12.setData(self.time_vect[indx], self.dl_vect[indx])
+        self.line21.setData(self.time_vect[indx], self.v1_vect[indx])
+        self.line22.setData(self.time_vect[indx], self.v2_vect[indx])
+
+        # update axis limits
+        t_lower, t_upper = self.find_axes_limits(np.min(self.time_vect), np.max(self.time_vect))
+        s_lower, s_upper = self.find_axes_limits(min(np.min(self.strain_vect)*0.8, np.min(self.sp_vect)*0.8), max(np.max(self.sp_vect)*1.2, np.max(self.strain_vect)*1.2))
+        dl_lower, dl_upper = self.find_axes_limits(np.min(self.dl_vect)*0.8, np.max(self.dl_vect)*1.2)
+        v1_lower, v1_upper = self.find_axes_limits(np.min(self.v1_vect)*0.8,np.max(self.v1_vect)*1.2)
+        v2_lower, v2_upper = self.find_axes_limits(np.min(self.v2_vect)*0.8, np.max(self.v2_vect)*1.2)
+        for p in [self.p11, self.p12, self.p21, self.p22]:
+            p.setXRange(t_lower, t_upper)
+        self.p11.setYRange(s_lower, s_upper)
+        self.p12.setYRange(dl_lower, dl_upper)
+        self.p21.setYRange(v1_lower, v1_upper)
+        self.p22.setYRange(v2_lower, v2_upper)
+
+        self.j = (self.j + 1) % self.window
+
+        if queue_read(self.run_q) == False:
+            print('Shut down display update thread')
+            self.app.quit()
+
+    def find_axes_limits(self, lower, upper):
+        """
+        helper function to obtain valid axes limits
+
+        args:
+            - lower:        lower limit
+            - upper:        upper limit
+
+        returns:
+            - lower_valid:
+            - upper_valid
+        """
+
+        lower_valid = lower
+        upper_valid = upper
+        if np.isnan(lower):
+            lower_valid = 0
+        if np.isinf(lower):
+            lower_valid = 0
+        if np.isnan(upper):
+            upper_valid = 0
+        if np.isinf(upper):
+            upper_valid = 0
+
+        return lower_valid, upper_valid
 
 if __name__=='__main__':
     '''
