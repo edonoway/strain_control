@@ -24,6 +24,8 @@ class SimulatedPS:
     def __init__(self, lcr):
         self.voltage_1 = LockedVar(0) # tension stack
         self.voltage_2 = LockedVar(0) # compression stack
+        self.output_1 = LockedVar(False)
+        self.output_2 = LockedVar(False)
         self.slew_rate = LockedVar(10) # V/s
         self.tol = 0.01 # V
         self.lcr = lcr

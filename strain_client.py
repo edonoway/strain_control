@@ -161,6 +161,40 @@ class StrainClient:
         response = self.transmit(message)
         return response
 
+    def set_output(self, channel, state):
+        '''
+        enable or disable output voltage on given channel.
+
+        args:
+            - channel(int):     channel 1 or 2 on power supply
+            - state(int):       0 or 1
+
+        returns:
+            - response:         '1' if successful
+        '''
+        if not(channel==1 or channel==2):
+            raise ValueError('Invalid power supply voltage channel, please choose either 1 or 2.')
+        if not(int(state)==0 or int(state)==1):
+            raise ValueError('Invalid power supply state, please choose either 0 or 1.')
+        message = 'OUT'+str(channel)+':'+str(state)
+        response = self.transmit(message)
+        return response
+
+    def get_output(self, channel):
+        '''
+        sets voltage explicitly on channel 1 or 2
+
+        args: None
+
+        returns:
+            - state:         0 or 1
+        '''
+        if not(channel==1 or channel==2):
+            raise ValueError('Invalid power supply voltage channel, please choose either 1 or 2.')
+        message = 'OUT'+str(channel)+':?'
+        response = self.transmit(message)
+        return response
+
     def set_voltage(self, channel, voltage):
         '''
         sets voltage explicitly on channel 1 or 2
