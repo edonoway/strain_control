@@ -85,7 +85,6 @@ class StrainServer:
 
         returns: class instance object
         '''
-
         self.lcr = lcr
         self.ps = ps
         self.serversocket = s
@@ -120,11 +119,9 @@ class StrainServer:
         '''
         Sets initial setting and paramters for both LCR meter and power supply.
         '''
-
         self.set_slew_rate(SLEW_RATE, queues)
         self.set_output(1,0)
         self.set_output(2,0)
-
         return 1
 
     def start_strain_control(self, mode, queues):
@@ -136,24 +133,19 @@ class StrainServer:
 
         returns: None
         '''
-
         # unpack queues
         [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
 
         current_setpoint = self.setpoint.locked_read()
-
         if mode==1:
-
             pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
             print('Starting PID control')
             pid_loop.start()
-
             current_thread = threading.current_thread()
             while current_thread.stopped()==False:
                 new_setpoint = self.setpoint.locked_read()
                 current_setpoint = new_setpoint
                 self.pid.setpoint = current_setpoint
-
             print('Stopping PID control')
             pid_loop.stop()
             pid_loop.join()
@@ -204,9 +196,7 @@ class StrainServer:
         '''
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
-
         print('Starting strain monitor')
-
         # unpack queues
         [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
 
@@ -225,24 +215,19 @@ class StrainServer:
             self.voltage_2.locked_update(v2)
             self.output_1.locked_update(out1)
             self.output_2.locked_update(out2)
-
             # update queues
             queue_update = [strain_q, cap_q, dl_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q]
             state_values = [strain, cap, dl, v1, v2, out1, out2]
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
-
             time.sleep(0.1)
-
         print('Shut down monitor thread')
 
     def start_comms(self, queues):
         '''
         start listening to serversocket and respond to connect requests with typical socket communications.
         '''
-
         print(f'Opening communication socket on {self.host} at port {self.port}')
-
         current_thread = threading.current_thread()
         while True:
             if current_thread.stopped()==False:
@@ -275,7 +260,6 @@ class StrainServer:
                             break
             else:
                 break
-
         print('Shut down communications thread')
 
     def set_strain(self, setpoint):
@@ -288,14 +272,12 @@ class StrainServer:
         returns: None
 
         '''
-
         setpoint_val = self.setpoint.locked_read()
         strain_val = self.strain.locked_read()
         start_voltage = self.strain_to_voltage(setpoint_val)
         voltage_increment = 0.5
         strain_tol=0.005
         direction = (setpoint_val - strain_val)/abs(setpoint_val - strain_val)
-
         n=0
         while abs(strain_val) <= abs(setpoint_val):
             approx_voltage = start_voltage + n*voltage_increment
@@ -329,13 +311,8 @@ class StrainServer:
 
         self.output_limits = (MIN_VOLTAGE, MAX_VOLTAGE)
         self.pid.setpoint = setpoint
-
         current_thread = threading.current_thread()
         while current_thread.stopped()==False:
-
-            # update setpoint
-            #self.pid.setpoint = self.setpoint.locked_read()
-
             # compute new output given current strain
             new_voltage = self.pid(self.strain.locked_read())
             if limit==True:
@@ -368,7 +345,6 @@ class StrainServer:
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
-
             # limit max/min voltage
             if channel==1:
                 max = self.max_voltage_1.locked_read()
@@ -384,7 +360,6 @@ class StrainServer:
                     voltage = max
                 elif voltage < min:
                     voltage = min
-
             # set voltages
             if self.sim==True:
                 self.ps.set_voltage(channel, voltage)
@@ -412,7 +387,6 @@ class StrainServer:
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
-
             if self.sim==True:
                 if channel==1:
                     v = self.ps.voltage_1.locked_read()
@@ -437,7 +411,6 @@ class StrainServer:
 
         return: None
         '''
-
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
@@ -468,7 +441,6 @@ class StrainServer:
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
-
             if self.sim==True:
                 if channel==1:
                     state = self.ps.output_1.locked_read()
@@ -487,7 +459,6 @@ class StrainServer:
         '''
         utility to set slew rate on power supply on both channels
         '''
-
         # unpack queues
         [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
 
@@ -511,7 +482,6 @@ class StrainServer:
             - l(float):             gap between sample plates in um
             - dl(float):            l - l0
         '''
-
         impedance = self.lcr.impedance # or read impedance as posted by another process
         cap = impedance[0]
         imaginary_impedance = impedance[1]
@@ -531,7 +501,6 @@ class StrainServer:
         returns:
             - dl(float):                  l - l0, the change in gap between sample plates from initial value in um
         '''
-
         # capacitor specifications
         area = 5.95e6 # um^2
         l0 = self.l0 # um
@@ -553,7 +522,6 @@ class StrainServer:
         returns:
             - voltage(float):       estimated required voltage to achieve strain
         '''
-
         l0 = self.l0_samps
         response = 0.05 # um/V
         dl = strain*l0
@@ -570,7 +538,6 @@ class StrainServer:
         returns:
             - response(string):
         '''
-
         # unpack queues
         [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
 
@@ -672,7 +639,6 @@ class StrainServer:
             mode = int(re.search(r'[0-1]', message)[0])
             self.shutdown(mode, run_q)
             response = '1'
-
         return response
 
     def shutdown(self, mode, run_q):
@@ -685,7 +651,6 @@ class StrainServer:
 
         returns: None
         '''
-
         print('Shutting down strain server:')
         if self.comms_loop.is_alive():
             self.comms_loop.stop()
@@ -712,9 +677,6 @@ class StrainServer:
         '''
         Main loop. Starts listening to client server for various commands, starting and closing threads as necessary.
         '''
-
-        # this should not start any control explicitly, such that if anything fails and the server must be restarted, it starts off in a stable state.
-
         # setup queues
         state_values = [self.strain.locked_read(), self.setpoint.locked_read(), self.cap.locked_read(), self.dl.locked_read(), self.l0_samp.locked_read(), self.voltage_1.locked_read(), self.voltage_2.locked_read(), self.output_1.locked_read(), self.output_2.locked_read(), self.p.locked_read(), self.i.locked_read(), self.d.locked_read(), self.min_voltage_1.locked_read(), self.min_voltage_2.locked_read(), self.max_voltage_1.locked_read(), self.max_voltage_2.locked_read(), self.slew_rate.locked_read(), self.ctrl_mode.locked_read(), self.run.locked_read()]
         strain_q = Queue()
@@ -778,7 +740,7 @@ class StrainDisplay:
 
     def start_display(self):
         '''
-        initiate plotting.
+        initiate graphical display, based on pyQt and pyqtgraph.
         '''
 
         print('Starting GUI display')
@@ -837,13 +799,6 @@ class StrainDisplay:
         self.v1_vect = np.zeros(self.window)
         self.v2_vect = np.zeros(self.window)
         self.cap_vect = np.zeros(self.window)
-        """
-        line11 = p11.plot(time_vect, strain_vect, pen=None, symbolBrush='orange', symbol='o',symbolSize=5)
-        line11_sp = p11.plot(time_vect, sp_vect, pen=pg.mkPen('black', width=3, style=QtCore.Qt.DashLine))
-        line12 = p12.plot(time_vect, dl_vect, pen=None, symbolBrush='blue', symbol='o', symbolSize=5)
-        line21 = p21.plot(time_vect, v1_vect, pen=None, symbolBrush='red', symbol='o', symbolSize=5)
-        line22 = p22.plot(time_vect, v2_vect, pen=None, symbolBrush='green', symbol='o', symbolSize=5)
-        """
         self.line11 = self.p11.plot(self.time_vect, self.strain_vect, pen=pg.mkPen('orange', width=4))
         self.line11_sp = self.p11.plot(self.time_vect, self.sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
         self.line12 = self.p12.plot(self.time_vect, self.dl_vect, pen=pg.mkPen('blue', width=4))
@@ -865,17 +820,11 @@ class StrainDisplay:
 
         print('Shut down GUI display')
 
-        # for safety, check if run condition still true and shutdown if true
-        #if self.run.get()==True:
-        #    self.shutdown(1)
-
     def update_display(self):
         '''
         updates GUI plot
         '''
-
         values = np.zeros(len(self.labels_val))
-
         t_start = time.time()
 
         # update labels
@@ -884,8 +833,7 @@ class StrainDisplay:
             values[i] = val
             self.labels_val[i].setText(str(round(float(val),4)))
 
-        # get new data
-        # labels_dict = {"Sample Length (um)":l0_samp_q, "Setpoint":setpoint_q, "Strain":strain_q, "Capacitance (pF)":cap_q, "dL (um)":dl_q, "Voltage 1 (V)":voltage_1_q, "Voltage 2 (V)":voltage_2_q, "P":p_q, "I":i_q, "D":d_q, "Voltage 1 Min":min_voltage_1_q, "Voltage 1 Max":max_voltage_1_q, "Voltage 2 Min":min_voltage_2_q, "Voltage 2 Max":max_voltage_2_q, "Slew Rate":slew_rate_q, "Control Status":ctrl_mode_q}
+        # get new data - make more robust
         new_strain = values[2]
         new_dl = values[4]
         new_v1 = values[5]
@@ -928,7 +876,7 @@ class StrainDisplay:
             self.app.quit()
 
     def find_axes_limits(self, lower, upper):
-        """
+        '''
         helper function to obtain valid axes limits
 
         args:
@@ -938,8 +886,7 @@ class StrainDisplay:
         returns:
             - lower_valid:
             - upper_valid
-        """
-
+        '''
         lower_valid = lower
         upper_valid = upper
         if np.isnan(lower):
@@ -950,7 +897,6 @@ class StrainDisplay:
             upper_valid = 0
         if np.isinf(upper):
             upper_valid = 0
-
         return lower_valid, upper_valid
 
 if __name__=='__main__':
