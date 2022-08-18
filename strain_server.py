@@ -483,7 +483,7 @@ class StrainServer:
             - dl(float):            l - l0
         '''
         impedance = self.lcr.impedance # or read impedance as posted by another process
-        cap = impedance[0]
+        cap = impedance[0]*1e12 # capacitance in pF
         imaginary_impedance = impedance[1]
         dl = self.capacitance_to_dl(cap)
         strain = dl/self.l0_samp.locked_read()
