@@ -547,7 +547,7 @@ class StrainServer:
                     queue_write(self.ctrl_mode_q, mode)
                     self.strain_control_loop.stop()
                     self.strain_control_loop.join()
-                    self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode, queues))
+                    self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
                     self.strain_control_loop.start()
                 else:
                     print(f'Control thread in mode {mode} already in progress, no action taken')
@@ -555,7 +555,7 @@ class StrainServer:
                 print(f'Starting control thread in mode {mode}')
                 self.ctrl_mode.locked_update(mode)
                 queue_write(self.ctrl_mode_q, mode)
-                self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode, queues))
+                self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode,))
                 self.strain_control_loop.start()
             response = '1'
         elif message == 'ECTRL:':
