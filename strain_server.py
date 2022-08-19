@@ -139,6 +139,8 @@ class StrainServer:
         '''
 
         current_setpoint = self.setpoint.locked_read()
+        self.ctrl_status.locked_update(1)
+        queue_write(self.ctrl_status_q, 1)
         if mode==1:
             pid_loop = StoppableThread(target=self.start_pid, args=(current_setpoint,), kwargs={'limit':False})
             print('Starting PID control')
@@ -192,6 +194,8 @@ class StrainServer:
             pid_loop.stop()
             pid_loop.join()
 
+        self.ctrl_status.locked_update(0)
+        queue_write(self.ctrl_status_q, 0)
         print('Shut down control thread')
 
     def start_strain_monitor(self):
@@ -199,7 +203,6 @@ class StrainServer:
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
         print('Starting strain monitor')
-        self.ctrl_status.locked_update(1)
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
             strain, cap, imaginary_impedance, dl = self.get_strain()
@@ -221,7 +224,6 @@ class StrainServer:
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
             time.sleep(0.1)
-        self.ctrl_status.locked_update(0)
         print('Shut down monitor thread')
 
     def start_comms(self):
