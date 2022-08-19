@@ -787,18 +787,18 @@ class StrainDisplay:
             p.disableAutoRange()
             p.setLabel('bottom', 'time (s)')
         self.p11.setLabel('left', 'strain (a.u.)')
-        self.p12.setLabel('left', r'dl ($\mu$m)')
+        self.p12.setLabel('left', r'dl (<font>&mu;m)')
         self.p21.setLabel('left', 'voltage 1 (V)')
         self.p22.setLabel('left', 'voltage 2 (V)')
 
         # define plot primitives
         self.time_vect = np.zeros(self.window)
-        self.strain_vect = np.zeros(self.window)
-        self.sp_vect = np.zeros(self.window)
-        self.dl_vect = np.zeros(self.window)
-        self.v1_vect = np.zeros(self.window)
-        self.v2_vect = np.zeros(self.window)
-        self.cap_vect = np.zeros(self.window)
+        self.strain_vect = queue_read(self.strain_q)*np.ones(self.window)
+        self.sp_vect = queue_read(self.setpoint_q)*np.ones(self.window)
+        self.dl_vect = queue_read(self.dl_q)*np.ones(self.window)
+        self.v1_vect = queue_read(self.voltage_1_q)*np.ones(self.window)
+        self.v2_vect = queue_read(self.voltage_2_q)*np.ones(self.window)
+        self.cap_vect = queue_read(self.cap_q)*np.ones(self.window)
         self.line11 = self.p11.plot(self.time_vect, self.strain_vect, pen=pg.mkPen('orange', width=4))
         self.line11_sp = self.p11.plot(self.time_vect, self.sp_vect, pen=pg.mkPen('black', width=4, style=QtCore.Qt.DashLine))
         self.line12 = self.p12.plot(self.time_vect, self.dl_vect, pen=pg.mkPen('blue', width=4))
@@ -857,11 +857,15 @@ class StrainDisplay:
         self.line22.setData(self.time_vect[indx], self.v2_vect[indx])
 
         # update axis limits
+        #self.p11.autoRange()
+        #self.p12.autoRange()
+        #self.p21.autoRange()
+        #self.p22.autoRange()
         t_lower, t_upper = self.find_axes_limits(np.min(self.time_vect), np.max(self.time_vect))
-        s_lower, s_upper = self.find_axes_limits(min(np.min(self.strain_vect)*0.8, np.min(self.sp_vect)*0.8), max(np.max(self.sp_vect)*1.2, np.max(self.strain_vect)*1.2))
-        dl_lower, dl_upper = self.find_axes_limits(np.min(self.dl_vect)*0.8, np.max(self.dl_vect)*1.2)
-        v1_lower, v1_upper = self.find_axes_limits(np.min(self.v1_vect)*0.8,np.max(self.v1_vect)*1.2)
-        v2_lower, v2_upper = self.find_axes_limits(np.min(self.v2_vect)*0.8, np.max(self.v2_vect)*1.2)
+        s_lower, s_upper = self.find_axes_limits(min(np.min(self.strain_vect), np.min(self.sp_vect)), max(np.max(self.sp_vect), np.max(self.strain_vect)))
+        dl_lower, dl_upper = self.find_axes_limits(np.min(self.dl_vect), np.max(self.dl_vect))
+        v1_lower, v1_upper = self.find_axes_limits(np.min(self.v1_vect),np.max(self.v1_vect))
+        v2_lower, v2_upper = self.find_axes_limits(np.min(self.v2_vect), np.max(self.v2_vect))
         for p in [self.p11, self.p12, self.p21, self.p22]:
             p.setXRange(t_lower, t_upper)
         self.p11.setYRange(s_lower, s_upper)
@@ -875,7 +879,7 @@ class StrainDisplay:
             print('Shut down display update thread')
             self.app.quit()
 
-    def find_axes_limits(self, lower, upper):
+    def find_axes_limits(self, lower, upper, fraction=0.1):
         '''
         helper function to obtain valid axes limits
 
@@ -886,6 +890,9 @@ class StrainDisplay:
         returns:
             - lower_valid:
             - upper_valid
+
+        kwargs:
+            - fraction:     fraction of lower/upper limit in data to offset min/max of plot. defaults to 0.1
         '''
         lower_valid = lower
         upper_valid = upper
@@ -897,6 +904,8 @@ class StrainDisplay:
             upper_valid = 0
         if np.isinf(upper):
             upper_valid = 0
+        lower_valid = lower_valid - np.abs(lower_valid)*fraction
+        upper_valid = upper_valid + np.abs(upper_valid)*fraction
         return lower_valid, upper_valid
 
 if __name__=='__main__':
