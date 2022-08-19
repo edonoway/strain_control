@@ -42,7 +42,7 @@ from pyqtgraph import QtCore, QtWidgets
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=False
+SIM=True
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=100
@@ -90,7 +90,7 @@ class StrainServer:
         self.serversocket = s
         self.l0 = l0
         self.l0_samp = LockedVar(l0_samp)
-        self.sim = sim
+        self.sim = LockedVar(sim)
         strain, cap, imaginary_impedance, dl = self.get_strain()
         self.strain = LockedVar(strain)
         self.setpoint = LockedVar(setpoint)
@@ -111,20 +111,24 @@ class StrainServer:
         #self.pid.sample_time = 0.01
         self.p, self.i, self.d = [LockedVar(j) for j in self.pid.tunings]
         self.ctrl_mode = LockedVar(1)
+        self.ctrl_status = LockedVar(0)
         self.run = LockedVar(True)
         self.host = HOST
         self.port = PORT
 
-    def initialize_instruments(self, queues):
+    def initialize_instruments(self):
         '''
         Sets initial setting and paramters for both LCR meter and power supply.
         '''
-        self.set_slew_rate(SLEW_RATE, queues)
+        self.set_slew_rate(SLEW_RATE)
         self.set_output(1,0)
         self.set_output(2,0)
+        if self.sim.locked_read()==False:
+            self.lcr.mode = "CPD"
+            self.lcr.frequency = 3e6 # 300kHz
         return 1
 
-    def start_strain_control(self, mode, queues):
+    def start_strain_control(self, mode):
         '''
         High level handling of strain control. For now, sets new strain value by first slowly ramping voltage to approximate voltage and then maintaining strain with a restricted PID loop.
 
@@ -133,8 +137,6 @@ class StrainServer:
 
         returns: None
         '''
-        # unpack queues
-        [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
 
         current_setpoint = self.setpoint.locked_read()
         if mode==1:
@@ -192,14 +194,11 @@ class StrainServer:
 
         print('Shut down control thread')
 
-    def start_strain_monitor(self, queues):
+    def start_strain_monitor(self):
         '''
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
         print('Starting strain monitor')
-        # unpack queues
-        [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
-
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
             strain, cap, imaginary_impedance, dl = self.get_strain()
@@ -216,14 +215,14 @@ class StrainServer:
             self.output_1.locked_update(out1)
             self.output_2.locked_update(out2)
             # update queues
-            queue_update = [strain_q, cap_q, dl_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q]
+            queue_update = [self.strain_q, self.cap_q, self.dl_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q]
             state_values = [strain, cap, dl, v1, v2, out1, out2]
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
             time.sleep(0.1)
         print('Shut down monitor thread')
 
-    def start_comms(self, queues):
+    def start_comms(self):
         '''
         start listening to serversocket and respond to connect requests with typical socket communications.
         '''
@@ -244,7 +243,7 @@ class StrainServer:
                             break
                         decoded_message = message.decode('utf8')
                         try:
-                            response = self.parse_message(decoded_message, queues)
+                            response = self.parse_message(decoded_message)
                         except:
                             error_msg = 'Error: unable to parse message: '+str(message)
                             print(error_msg)
@@ -361,7 +360,7 @@ class StrainServer:
                 elif voltage < min:
                     voltage = min
             # set voltages
-            if self.sim==True:
+            if self.sim.locked_read()==True:
                 self.ps.set_voltage(channel, voltage)
             else:
                 if channel==1:
@@ -387,7 +386,7 @@ class StrainServer:
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
-            if self.sim==True:
+            if self.sim.locked_read()==True:
                 if channel==1:
                     v = self.ps.voltage_1.locked_read()
                 elif channel==2:
@@ -416,7 +415,7 @@ class StrainServer:
                 raise ValueError('channel must be int 1 or 2.')
             if not (state==0 or state==1):
                 raise ValueError('output state must be 1 or 0')
-            if self.sim==True:
+            if self.sim.locked_read()==True:
                 if channel==1:
                     v = self.ps.output_1.locked_update(state)
                 elif channel==2:
@@ -441,7 +440,7 @@ class StrainServer:
         try:
             if not (channel==1 or channel==2):
                 raise ValueError('channel must be int 1 or 2.')
-            if self.sim==True:
+            if self.sim.locked_read()==True:
                 if channel==1:
                     state = self.ps.output_1.locked_read()
                 elif channel==2:
@@ -455,21 +454,19 @@ class StrainServer:
         except:
             print('Error: invaid voltage channel, please choose 1 or 2.')
 
-    def set_slew_rate(self, slew_rate, queues):
+    def set_slew_rate(self, slew_rate):
         '''
         utility to set slew rate on power supply on both channels
         '''
         # unpack queues
-        [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
-
         print(f'Setting slew rate on power supply to {slew_rate} V/s')
-        if SIM==True:
+        if self.sim.locked_read()==True:
             self.ps.slew_rate.locked_update(slew_rate)
         else:
             self.ps.slew_rate_1 = slew_rate
             self.ps.slew_rate_2 = slew_rate
         self.slew_rate.locked_update(slew_rate)
-        queue_write(slew_rate_q, slew_rate)
+        queue_write(self.slew_rate_q, slew_rate)
 
     def get_strain(self):
         '''
@@ -528,7 +525,7 @@ class StrainServer:
         voltage = dl/response
         return voltage
 
-    def parse_message(self, message, queues):
+    def parse_message(self, message):
         '''
         Utility that implements communications protocol with strain client. If message is not parable, error handling is handled by communication loop.
 
@@ -538,9 +535,6 @@ class StrainServer:
         returns:
             - response(string):
         '''
-        # unpack queues
-        [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q] = queues
-
         if re.match(r'SCTRL:[1-3]', message):
             mode = int(re.search(r'[1-3]', message)[0])
             if self.strain_control_loop.is_alive():
@@ -548,7 +542,7 @@ class StrainServer:
                 if mode!=current_mode:
                     print(f'Stopping control thread in mode {current_mode} and restarting in mode {mode}')
                     self.ctrl_mode.locked_update(mode)
-                    queue_write(ctrl_mode_q, mode)
+                    queue_write(self.ctrl_mode_q, mode)
                     self.strain_control_loop.stop()
                     self.strain_control_loop.join()
                     self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode, queues))
@@ -558,7 +552,7 @@ class StrainServer:
             else:
                 print(f'Starting control thread in mode {mode}')
                 self.ctrl_mode.locked_update(mode)
-                queue_write(ctrl_mode_q, mode)
+                queue_write(self.ctrl_mode_q, mode)
                 self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(mode, queues))
                 self.strain_control_loop.start()
             response = '1'
@@ -579,7 +573,7 @@ class StrainServer:
         elif re.match(r'STR:-?[0-9]+[\.]?[0-9]*', message):
             setpoint = float(re.search(r'-?[0-9]+[\.]?[0-9]*', message)[0])
             self.setpoint.locked_update(setpoint)
-            queue_write(setpoint_q, setpoint)
+            queue_write(self.setpoint_q, setpoint)
             response = '1'
         elif re.match(r'VOL[1-2]:\?', message):
             channel = int(re.search(r'[1-2]', message)[0])
@@ -605,21 +599,21 @@ class StrainServer:
             if channel==1:
                 self.min_voltage_1.locked_update(min)
                 self.max_voltage_1.locked_update(max)
-                queue_write(min_voltage_1_q, min)
-                queue_write(max_voltage_1_q, max)
+                queue_write(self.min_voltage_1_q, min)
+                queue_write(self.max_voltage_1_q, max)
                 response = '1'
             elif channel==2:
                 self.min_voltage_2.locked_update(min)
                 self.max_voltage_2.locked_update(max)
-                queue_write(min_voltage_2_q, min)
-                queue_write(max_voltage_2_q, max)
+                queue_write(self.min_voltage_2_q, min)
+                queue_write(self.max_voltage_2_q, max)
                 response = '1'
             else:
                 response = 'Invalid channel'
         elif re.match(r'SAMPL0:[0-9]+[\.]?[0-9]*', message):
             samp_l0 = float(re.findall(r'[0-9]+[\.]?[0-9]*', message)[1])
             self.l0_samp.locked_update(samp_l0)
-            queue_write(l0_samp_q, samp_l0)
+            queue_write(self.l0_samp_q, samp_l0)
             response='1'
         elif re.match(r'PID:[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*,[0-9]+[\.]?[0-9]*', message):
             p, i, d = [float(j) for j in re.findall(r'[0-9]+[\.]?[0-9]*', message)]
@@ -627,21 +621,21 @@ class StrainServer:
             self.p.locked_update(p)
             self.i.locked_update(i)
             self.d.locked_update(d)
-            queue_write(p_q, p)
-            queue_write(i_q, i)
-            queue_write(d_q, d)
+            queue_write(self.p_q, p)
+            queue_write(self.i_q, i)
+            queue_write(self.d_q, d)
             response = '1'
         elif re.match(r'VSLW:[0-9]+[\.]?[0-9]*', message):
             slew_rate = float(re.search(r'[0-9]+[\.]?[0-9]*', message)[0])
-            self.set_slew_rate(slew_rate, queues)
+            self.set_slew_rate(slew_rate)
             response = '1'
         elif re.match(r'SHTDWN:[0-1]', message):
             mode = int(re.search(r'[0-1]', message)[0])
-            self.shutdown(mode, run_q)
+            self.shutdown(mode)
             response = '1'
         return response
 
-    def shutdown(self, mode, run_q):
+    def shutdown(self, mode):
         '''
         Initiates shutdown of server.
 
@@ -671,14 +665,14 @@ class StrainServer:
             self.strain_monitor_loop.stop()
             self.strain_monitor_loop.join()
         self.run.locked_update(False)
-        queue_write(run_q, False)
+        queue_write(self.run_q, False)
 
     def do_main_loop(self):
         '''
         Main loop. Starts listening to client server for various commands, starting and closing threads as necessary.
         '''
         # setup queues
-        state_values = [self.strain.locked_read(), self.setpoint.locked_read(), self.cap.locked_read(), self.dl.locked_read(), self.l0_samp.locked_read(), self.voltage_1.locked_read(), self.voltage_2.locked_read(), self.output_1.locked_read(), self.output_2.locked_read(), self.p.locked_read(), self.i.locked_read(), self.d.locked_read(), self.min_voltage_1.locked_read(), self.min_voltage_2.locked_read(), self.max_voltage_1.locked_read(), self.max_voltage_2.locked_read(), self.slew_rate.locked_read(), self.ctrl_mode.locked_read(), self.run.locked_read()]
+        state_values = [self.strain.locked_read(), self.setpoint.locked_read(), self.cap.locked_read(), self.dl.locked_read(), self.l0_samp.locked_read(), self.voltage_1.locked_read(), self.voltage_2.locked_read(), self.output_1.locked_read(), self.output_2.locked_read(), self.p.locked_read(), self.i.locked_read(), self.d.locked_read(), self.min_voltage_1.locked_read(), self.min_voltage_2.locked_read(), self.max_voltage_1.locked_read(), self.max_voltage_2.locked_read(), self.slew_rate.locked_read(), self.ctrl_mode.locked_read(), self.ctrl_status.locked_read(), self.run.locked_read()]
         strain_q = Queue()
         setpoint_q = Queue()
         cap_q = Queue()
@@ -697,22 +691,24 @@ class StrainServer:
         max_voltage_2_q = Queue()
         slew_rate_q = Queue()
         ctrl_mode_q = Queue()
+        ctrl_status_q = Queue()
         run_q = Queue()
-        queues = [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, run_q]
+        queues = [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, ctrl_status_q, run_q]
         for ii, q in enumerate(queues):
             queue_write(q, state_values[ii])
+        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q] = queues
 
-        self.initialize_instruments(queues)
+        self.initialize_instruments()
 
         # start monitoring lcr meter
-        self.strain_monitor_loop = StoppableThread(target=self.start_strain_monitor, args=(queues,))
+        self.strain_monitor_loop = StoppableThread(target=self.start_strain_monitor)
         self.strain_monitor_loop.start()
 
         # create conntrol thread
-        self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(), queues))
+        self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
 
         # start comms
-        self.comms_loop = StoppableThread(target=self.start_comms, args=(queues,))
+        self.comms_loop = StoppableThread(target=self.start_comms)
         self.comms_loop.start()
 
         # infinite loop display
@@ -732,9 +728,9 @@ class StrainDisplay:
     def __init__(self, queues):
 
         # unpack queues
-        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.run_q] = queues
+        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q] = queues
         # setup dictionaries
-        self.labels_dict = {"Sample Length (um)":self.l0_samp_q, "Setpoint":self.setpoint_q, "Strain":self.strain_q, "Capacitance (pF)":self.cap_q, "dL (um)":self.dl_q, "Voltage 1 (V)":self.voltage_1_q, "Voltage 2 (V)":self.voltage_2_q, "P":self.p_q, "I":self.i_q, "D":self.d_q, "Voltage 1 Min":self.min_voltage_1_q, "Voltage 1 Max":self.max_voltage_1_q, "Voltage 2 Min":self.min_voltage_2_q, "Voltage 2 Max":self.max_voltage_2_q, "Slew Rate":self.slew_rate_q, "Control Status":self.ctrl_mode_q, "Output 1":self.output_1_q, "Output_2":self.output_2_q}
+        self.labels_dict = {"Sample Length (um)":self.l0_samp_q, "Setpoint":self.setpoint_q, "Strain":self.strain_q, "Capacitance (pF)":self.cap_q, "dL (um)":self.dl_q, "Voltage 1 (V)":self.voltage_1_q, "Voltage 2 (V)":self.voltage_2_q, "P":self.p_q, "I":self.i_q, "D":self.d_q, "Voltage 1 Min":self.min_voltage_1_q, "Voltage 1 Max":self.max_voltage_1_q, "Voltage 2 Min":self.min_voltage_2_q, "Voltage 2 Max":self.max_voltage_2_q, "Slew Rate":self.slew_rate_q, "Control Status":self.ctrl_status_q, "Control Mode":self.ctrl_mode_q, "Output 1":self.output_1_q, "Output_2":self.output_2_q}
         self.labels_val = []
         self.window=1000
 
