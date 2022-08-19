@@ -42,7 +42,7 @@ from pyqtgraph import QtCore, QtWidgets
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=True
+SIM=False
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=100
@@ -125,7 +125,7 @@ class StrainServer:
         self.set_output(2,0)
         if self.sim.locked_read()==False:
             self.lcr.mode = "CPD"
-            self.lcr.frequency = 3e6 # 300kHz
+            self.lcr.frequency = 3e5 # 300kHz
         return 1
 
     def start_strain_control(self, mode):

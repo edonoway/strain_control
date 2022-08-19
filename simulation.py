@@ -111,4 +111,4 @@ class SimulatedPS:
         response = 12e-3 # pF/um - can be used for simpler approx
         eps0 = 8.854e-6 # pF/um - vacuum permitivity
         cap = eps0*area/(dl+l0) + 0.04
-        return [cap, cap]
+        return [cap/1e12, cap/1e12]
