@@ -199,6 +199,7 @@ class StrainServer:
         Continuously reads lcr meter and ps and updates all state variables to class instance variables. In addition, in the future this should handle logging of instrument data.
         '''
         print('Starting strain monitor')
+        self.ctrl_status.locked_update(1)
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
             strain, cap, imaginary_impedance, dl = self.get_strain()
@@ -220,6 +221,7 @@ class StrainServer:
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
             time.sleep(0.1)
+        self.ctrl_status.locked_update(0)
         print('Shut down monitor thread')
 
     def start_comms(self):
