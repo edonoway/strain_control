@@ -345,35 +345,34 @@ class StrainServer:
         returns: None
 
         '''
-        try:
-            if not (channel==1 or channel==2):
-                raise ValueError('channel must be int 1 or 2.')
-            # limit max/min voltage
+        if not (channel==1 or channel==2):
+            raise ValueError('channel must be int 1 or 2.')
+        # limit max/min voltage
+        if channel==1:
+            max = self.max_voltage_1.locked_read()
+            min = self.min_voltage_1.locked_read()
+            if voltage > max:
+                voltage = max
+            elif voltage < min:
+                voltage = min
+        elif channel==2:
+            max = self.max_voltage_2.locked_read()
+            min = self.min_voltage_2.locked_read()
+            if voltage > max:
+                voltage = max
+            elif voltage < min:
+                voltage = min
+        # set voltages
+        if self.sim.locked_read()==True:
+            self.ps.set_voltage(channel, voltage)
+        else:
             if channel==1:
-                max = self.max_voltage_1.locked_read()
-                min = self.min_voltage_1.locked_read()
-                if voltage > max:
-                    voltage = max
-                elif voltage < min:
-                    voltage = min
+                self.ps.voltage_1 = voltage
             elif channel==2:
-                max = self.max_voltage_2.locked_read()
-                min = self.min_voltage_2.locked_read()
-                if voltage > max:
-                    voltage = max
-                elif voltage < min:
-                    voltage = min
-            # set voltages
-            if self.sim.locked_read()==True:
-                self.ps.set_voltage(channel, voltage)
-            else:
-                if channel==1:
-                    self.ps.voltage_1 = voltage
-                elif channel==2:
-                    self.ps.voltage_2 = voltage
-            #print(f'Ramping voltage on channel {channel} to {voltage} V')
-        except:
-            print('Error: invaid voltage channel, please choose 1 or 2.')
+                self.ps.voltage_2 = voltage
+        #print(f'Ramping voltage on channel {channel} to {voltage} V')
+        #except:
+        #S    print('Error: unable to set voltage.')
 
     def get_voltage(self, channel):
         '''
