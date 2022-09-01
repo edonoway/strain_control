@@ -43,7 +43,7 @@ from pyqtgraph import QtCore, QtWidgets
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=True
+SIM=False
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=100
@@ -356,34 +356,35 @@ class StrainServer:
         returns: None
 
         '''
-        if not (channel==1 or channel==2):
-            raise ValueError('channel must be int 1 or 2.')
-        # limit max/min voltage
-        if channel==1:
-            max = self.max_voltage_1.locked_read()
-            min = self.min_voltage_1.locked_read()
-            if voltage > max:
-                voltage = max
-            elif voltage < min:
-                voltage = min
-        elif channel==2:
-            max = self.max_voltage_2.locked_read()
-            min = self.min_voltage_2.locked_read()
-            if voltage > max:
-                voltage = max
-            elif voltage < min:
-                voltage = min
-        # set voltages
-        if self.sim.locked_read()==True:
-            self.ps.set_voltage(channel, voltage)
-        else:
+        try:
+            if not (channel==1 or channel==2):
+                raise ValueError('channel must be int 1 or 2.')
+            # limit max/min voltage
             if channel==1:
-                self.ps.voltage_1 = voltage
+                max = self.max_voltage_1.locked_read()
+                min = self.min_voltage_1.locked_read()
+                if voltage > max:
+                    voltage = max
+                elif voltage < min:
+                    voltage = min
             elif channel==2:
-                self.ps.voltage_2 = voltage
+                max = self.max_voltage_2.locked_read()
+                min = self.min_voltage_2.locked_read()
+                if voltage > max:
+                    voltage = max
+                elif voltage < min:
+                    voltage = min
+            # set voltages
+            if self.sim.locked_read()==True:
+                self.ps.set_voltage(channel, voltage)
+            else:
+                if channel==1:
+                    self.ps.voltage_1 = voltage
+                elif channel==2:
+                    self.ps.voltage_2 = voltage
         #print(f'Ramping voltage on channel {channel} to {voltage} V')
-        #except:
-        #S    print('Error: unable to set voltage.')
+        except:
+            print('Error: unable to set voltage.')
 
     def get_voltage(self, channel):
         '''
@@ -412,7 +413,7 @@ class StrainServer:
                     v = self.ps.instant_voltage_2
             return v
         except:
-            print('Error: invaid voltage channel, please choose 1 or 2.')
+            print('Error: unable to read voltage.')
 
     def set_output(self, channel, state):
         '''
@@ -440,7 +441,7 @@ class StrainServer:
                 elif channel==2:
                     self.ps.output_2 = state
         except:
-            print('Error: invaid voltage channel or state, please choose 1 or 2 and 0 or 1 respectively.')
+            print('Error: unable to set output.')
 
     def get_output(self, channel):
         '''
@@ -466,7 +467,7 @@ class StrainServer:
                     state = self.ps.output_2
             return state
         except:
-            print('Error: invaid voltage channel, please choose 1 or 2.')
+            print('Error: unable to read output.')
 
     def set_slew_rate(self, slew_rate):
         '''
