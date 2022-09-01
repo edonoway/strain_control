@@ -19,10 +19,11 @@ As time allows:
 '''
 
 from concurrency_classes import LockedVar, StoppableThread, queue_write, queue_read
-from simulation import SimulatedLCR, SimulatedPS
+from simulation import SimulatedLCR, SimulatedPS, SimulatedMontana
 from pymeasure.instruments.agilent import AgilentE4980
 from pymeasure.instruments.razorbill import razorbillRP100
 import pyvisa
+import OrensteinLab_git.Instrument.montana.cryocore as cryocore
 from simple_pid import PID
 from threading import Thread, Lock, Event
 import threading
@@ -42,7 +43,7 @@ from pyqtgraph import QtCore, QtWidgets
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=False
+SIM=True
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=100
@@ -50,6 +51,8 @@ I=100
 D=0.1
 L0 = 68.68 # initial capacitor spacing
 L0_SAMP = 68.68
+C_MEASURED_0 = 0.824 # pF, measured capacitance at 300K and 0V after a zeroing procedure.
+C_0 = 0.808 # pF, true capacitance at 300K and 0 V.
 
 ### LIMIT OUTPUT VOLTAGE HERE ###
 
@@ -59,6 +62,8 @@ MIN_VOLTAGE = -5#-19 # V
 ### COMMUNICATION SETTINGS ###
 LCR_ADDRESS = 'USB0::0x2A8D::0x2F01::MY54412905::0::INSTR'
 PS_ADDRESS = 'ASRL4::INSTR'
+MONTANA_ADDRESS = '10.1.1.15'
+LAKESHORE_ADDRESS = ''
 HOST = 'localhost'
 PORT = 15200
 
@@ -68,13 +73,14 @@ PORT = 15200
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, sim=False):
+    def __init__(self, lcr, ps, cryo, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, sim=False):
         '''
         class constructor.
 
         args:
             - lcr                   pymeasure LCR handle or simulation object
             - ps:                   pymeasure power supply handle or simulation object
+            - cryo:                 Montana CryoCore object
             - s:                    a bound socket for communicating with strain client.
             - setpoint(float):       initial setpoint for PID
             - P(float):              proportional PID parameter
@@ -87,10 +93,13 @@ class StrainServer:
         '''
         self.lcr = lcr
         self.ps = ps
+        self.cryo = cryo
         self.serversocket = s
         self.l0 = l0
         self.l0_samp = LockedVar(l0_samp)
         self.sim = LockedVar(sim)
+        temperature = self.cryo.get_platform_temperature()[1]
+        self.temperature = LockedVar(temperature)
         strain, cap, imaginary_impedance, dl = self.get_strain()
         self.strain = LockedVar(strain)
         self.setpoint = LockedVar(setpoint)
@@ -206,10 +215,12 @@ class StrainServer:
         current_thread = threading.current_thread()
         while current_thread.stopped() == False:
             strain, cap, imaginary_impedance, dl = self.get_strain()
+            temperature = self.cryo.get_platform_temperature()[1]
             v1 = self.get_voltage(1)
             v2 = self.get_voltage(2)
             out1 = self.get_output(1)
             out2 = self.get_output(2)
+            self.temperature.locked_update(temperature)
             self.strain.locked_update(strain)
             self.cap.locked_update(cap)
             self.imaginary_impedance.locked_update(imaginary_impedance)
@@ -219,8 +230,8 @@ class StrainServer:
             self.output_1.locked_update(out1)
             self.output_2.locked_update(out2)
             # update queues
-            queue_update = [self.strain_q, self.cap_q, self.dl_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q]
-            state_values = [strain, cap, dl, v1, v2, out1, out2]
+            queue_update = [self.strain_q, self.cap_q, self.dl_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.temperature_q]
+            state_values = [strain, cap, dl, v1, v2, out1, out2, temperature]
             for ii, q in enumerate(queue_update):
                 queue_write(q, state_values[ii])
             time.sleep(0.1)
@@ -489,11 +500,25 @@ class StrainServer:
         strain = dl/self.l0_samp.locked_read()
         return strain, cap, imaginary_impedance, dl
 
-    def capacitance_to_dl(self, capacitance):
+    def capacitance_to_dl(self, capacitance_measured):
         '''
-        helper function that returns change gap between sample plates from initial gap (dl = l - l0) given a capacitance reading based on the CS130 capacitor calibration.
+        helper function that returns change in gap between sample plates from initial gap (dl = l - l0) given a capacitance reading based on the CS130 capacitor calibration.
 
-        In the future will account for the tempreature offset. That is,  we must first do cap = cap - cap_offset and then can get length with the calibration curve.
+        The capacitance can be thought of as comprising four parts:
+
+        C_measured(V, T) = deltaC(V) + C_0 + C_parasitic + C_temp(T),
+
+        where,
+
+        C_true = deltaC(V) + C_0 = C_measured(V,T) - C_parasitic - C_temp(T)
+
+        The "true" capacitance we want is the 0 strain capacitance C_0 plus the voltage induced change deltaC(V). The parasitic capacitance can be obtained by doing a proper "zeroing" procedure at room temperature and subtracting off the known "true" value at 0 volts, ie since we know C_0 = 0.808 pF,
+
+        C_parasitic = C_measured(0,300) - 0.808 pF.
+
+        The temperature induced offset should also be calculated as
+
+        C_temp(T) = C_measured(0,T) - C_measured(0,300)
 
         args:
             - capacitance(float):         capacitance in pF
@@ -503,14 +528,31 @@ class StrainServer:
         '''
         # capacitor specifications
         area = 5.95e6 # um^2
-        l0 = self.l0 # um
-        cap_initial_value = 0.8 # pF
-        response = 12e-3 # pF/um
         eps0 = 8.854e-6 # pF/um - vacuum permitivity
-        cap_offset = 0.04 # pf - eventually should obtain this from a temperature calibration of "0" strain.
-        # temperature calibration curve: d = eps*A/(C - offset) - x0
-        dl = eps0*area/(capacitance - cap_offset) - l0 # um
+        capacitance_parasitic = C_MEASURED_0 - C_0
+        capacitance_temp = self.capacitance_temperature_offset(self.temperature.locked_read())
+        capacitance_true = capacitance_measured - capacitance_parasitic - capacitance_temp
+        l0 = self.l0 # um
+        cap_offset = 0.04 # pf - this appears in the equation for finding dl from the true capactiance.
+        dl = eps0*area/(capacitance_true - cap_offset) - l0 # um
         return dl
+
+    def capacitance_temperature_offset(self, temperature):
+        '''
+        Calculate the temperature induced offset to capacitance in pF.
+
+        args:
+            - temperature(float):       temperature in K
+
+        returns:
+            - offset(float):            capacitance offset, ie
+                                        C_measured(0,temp) - C_measured(0,300)
+        '''
+
+        c_measured0 = C_MEASURED_0
+        c_measuredT = c_measured0 # change to reflect to calibartion curve. may need to find a good way to interpolate data
+
+        return c_measuredT - c_measured0
 
     def strain_to_voltage(self, strain):
         '''
@@ -675,7 +717,7 @@ class StrainServer:
         Main loop. Starts listening to client server for various commands, starting and closing threads as necessary.
         '''
         # setup queues
-        state_values = [self.strain.locked_read(), self.setpoint.locked_read(), self.cap.locked_read(), self.dl.locked_read(), self.l0_samp.locked_read(), self.voltage_1.locked_read(), self.voltage_2.locked_read(), self.output_1.locked_read(), self.output_2.locked_read(), self.p.locked_read(), self.i.locked_read(), self.d.locked_read(), self.min_voltage_1.locked_read(), self.min_voltage_2.locked_read(), self.max_voltage_1.locked_read(), self.max_voltage_2.locked_read(), self.slew_rate.locked_read(), self.ctrl_mode.locked_read(), self.ctrl_status.locked_read(), self.run.locked_read()]
+        state_values = [self.strain.locked_read(), self.setpoint.locked_read(), self.cap.locked_read(), self.dl.locked_read(), self.l0_samp.locked_read(), self.voltage_1.locked_read(), self.voltage_2.locked_read(), self.output_1.locked_read(), self.output_2.locked_read(), self.p.locked_read(), self.i.locked_read(), self.d.locked_read(), self.min_voltage_1.locked_read(), self.min_voltage_2.locked_read(), self.max_voltage_1.locked_read(), self.max_voltage_2.locked_read(), self.slew_rate.locked_read(), self.ctrl_mode.locked_read(), self.ctrl_status.locked_read(), self.run.locked_read(), self.temperature.locked_read()]
         strain_q = Queue()
         setpoint_q = Queue()
         cap_q = Queue()
@@ -696,10 +738,11 @@ class StrainServer:
         ctrl_mode_q = Queue()
         ctrl_status_q = Queue()
         run_q = Queue()
-        queues = [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, ctrl_status_q, run_q]
+        temperature_q = Queue()
+        queues = [strain_q, setpoint_q, cap_q, dl_q, l0_samp_q, voltage_1_q, voltage_2_q, output_1_q, output_2_q, p_q, i_q, d_q, min_voltage_1_q, min_voltage_2_q, max_voltage_1_q, max_voltage_2_q, slew_rate_q, ctrl_mode_q, ctrl_status_q, run_q, temperature_q]
         for ii, q in enumerate(queues):
             queue_write(q, state_values[ii])
-        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q] = queues
+        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q, self.temperature_q] = queues
 
         self.initialize_instruments()
 
@@ -731,9 +774,9 @@ class StrainDisplay:
     def __init__(self, queues):
 
         # unpack queues
-        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q] = queues
+        [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q, self.temperature_q] = queues
         # setup dictionaries
-        self.labels_dict = {"Sample Length (um)":self.l0_samp_q, "Setpoint":self.setpoint_q, "Strain":self.strain_q, "Capacitance (pF)":self.cap_q, "dL (um)":self.dl_q, "Voltage 1 (V)":self.voltage_1_q, "Voltage 2 (V)":self.voltage_2_q, "P":self.p_q, "I":self.i_q, "D":self.d_q, "Voltage 1 Min":self.min_voltage_1_q, "Voltage 1 Max":self.max_voltage_1_q, "Voltage 2 Min":self.min_voltage_2_q, "Voltage 2 Max":self.max_voltage_2_q, "Slew Rate":self.slew_rate_q, "Control Status":self.ctrl_status_q, "Control Mode":self.ctrl_mode_q, "Output 1":self.output_1_q, "Output_2":self.output_2_q}
+        self.labels_dict = {"Sample Length (um)":self.l0_samp_q, "Setpoint":self.setpoint_q, "Strain":self.strain_q, "Capacitance (pF)":self.cap_q, "dL (um)":self.dl_q, "Voltage 1 (V)":self.voltage_1_q, "Voltage 2 (V)":self.voltage_2_q, "P":self.p_q, "I":self.i_q, "D":self.d_q, "Voltage 1 Min":self.min_voltage_1_q, "Voltage 1 Max":self.max_voltage_1_q, "Voltage 2 Min":self.min_voltage_2_q, "Voltage 2 Max":self.max_voltage_2_q, "Slew Rate":self.slew_rate_q, "Control Status":self.ctrl_status_q, "Control Mode":self.ctrl_mode_q, "Output 1":self.output_1_q, "Output_2":self.output_2_q, "Platform Temperature (K)":self.temperature_q}
         self.labels_val = []
         self.window=1000
 
@@ -916,11 +959,12 @@ if __name__=='__main__':
 
         lcr = SimulatedLCR(0.808)
         ps = SimulatedPS(lcr)
+        cryo = SimulatedMontana()
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((HOST, PORT))
 
-            strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
+            strainserver = StrainServer(lcr, ps, cryo, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
             strainserver.do_main_loop()
 
@@ -939,6 +983,8 @@ if __name__=='__main__':
                     s.bind((HOST, PORT))
                     print(f'Bound socket from host {HOST} to port {PORT}.')
 
-                    strainserver = StrainServer(lcr, ps, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
+                    cryo = cryocore.CryoCore(MONTANA_ADDRESS)
+
+                    strainserver = StrainServer(lcr, ps, cryo, s, STARTING_SETPOINT, P, I, D, L0_SAMP, l0=L0, sim=SIM)
 
                     strainserver.do_main_loop()

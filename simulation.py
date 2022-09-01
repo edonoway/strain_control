@@ -112,3 +112,17 @@ class SimulatedPS:
         eps0 = 8.854e-6 # pF/um - vacuum permitivity
         cap = eps0*area/(dl+l0) + 0.04
         return [cap/1e12, cap/1e12]
+
+class SimulatedMontana:
+    '''
+    simulation of Montana CryoAdvance 100 for reading temperaure
+    '''
+
+    def __init__(self):
+        self.platform_temperature = LockedVar(300)
+
+    def get_platform_temperature(self):
+        '''
+        returns the simulated temperature in same form as Montana command.
+        '''
+        return [True, self.platform_temperature.locked_read()]
