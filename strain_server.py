@@ -300,7 +300,7 @@ class StrainServer:
         time_interval = self.logging_interval.locked_read()
         current_thread = threading.current_thread()
         with open(self.filepath.locked_read(), 'a') as f:
-            f.write(f'Strain \t Setpoint (K) \t Capacitance (pF) \t dl (um) \t Sample Length (um) \t Voltage 1 (V) \t Voltage 2 (V) \t Output 1 \t Output 2 \t P \t I \t D \t Min Voltage 1 \t Min Voltage 2 \t Max Voltage 1 \t Max Voltage 2 \t Slew Rate \t Mode \t Status \t Run \t Temperature (K) \n')
+            f.write(f'Time \t Strain \t Setpoint (K) \t Capacitance (pF) \t dl (um) \t Sample Length (um) \t Voltage 1 (V) \t Voltage 2 (V) \t Output 1 \t Output 2 \t P \t I \t D \t Min Voltage 1 \t Min Voltage 2 \t Max Voltage 1 \t Max Voltage 2 \t Slew Rate \t Mode \t Status \t Run \t Temperature (K) \n')
         while current_thread.stopped() == False:
             queues = [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q, self.temperature_q]
             with open(self.filepath.locked_read(), 'a') as f:
