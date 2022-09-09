@@ -31,6 +31,7 @@ import multiprocessing as mp
 from multiprocessing import Queue
 import matplotlib.pyplot as plt
 import numpy as np
+import datetime
 import time
 import sys
 import socket
@@ -73,21 +74,22 @@ PORT = 15200
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, cryo, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, sim=False):
+    def __init__(self, lcr, ps, cryo, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, logging_interval=0.5, sim=False):
         '''
         class constructor.
 
         args:
-            - lcr                   pymeasure LCR handle or simulation object
-            - ps:                   pymeasure power supply handle or simulation object
-            - cryo:                 Montana CryoCore object
-            - s:                    a bound socket for communicating with strain client.
-            - setpoint(float):       initial setpoint for PID
-            - P(float):              proportional PID parameter
-            - I(float):              integral PID parameter
-            - D(float):              derivative PID parameter
-            - l0_samp(float):        initial length of sample
-            - l0(float):             initial capacitor gap
+            - lcr                      pymeasure LCR handle or simulation object
+            - ps:                      pymeasure power supply handle or simulation object
+            - cryo:                    Montana CryoCore object
+            - s:                       a bound socket for communicating with strain client.
+            - setpoint(float):         initial setpoint for PID
+            - P(float):                proportional PID parameter
+            - I(float):                integral PID parameter
+            - D(float):                derivative PID parameter
+            - l0_samp(float):          initial length of sample
+            - l0(float):               initial capacitor gap
+            - logging_interval(float): time interval between data captures for file log
 
         returns: class instance object
         '''
@@ -97,6 +99,7 @@ class StrainServer:
         self.serversocket = s
         self.l0 = l0
         self.l0_samp = LockedVar(l0_samp)
+        self.logging_interval = LockedVar(logging_interval)
         self.sim = LockedVar(sim)
         temperature = self.cryo.get_platform_temperature()[1]
         self.temperature = LockedVar(temperature)
@@ -124,6 +127,10 @@ class StrainServer:
         self.run = LockedVar(True)
         self.host = HOST
         self.port = PORT
+        # filename_head = r'C:\Users\orens\Google Drive\Shared drives\Orenstein Lab\Data\Strain cell log files'
+        # filename = '\\' + time.strftime("%y%m%d_%H:%M:%S%z", time.localtime()) + 'StrainServerLog.dat'
+        # tot_filename = filename_head + filename
+        # self.filepath = LockedVar(tot_filename)
 
     def initialize_instruments(self):
         '''
@@ -275,6 +282,34 @@ class StrainServer:
             else:
                 break
         print('Shut down communications thread')
+
+    def filelog(self, time_interval):
+        '''
+        Logs all data in main loop to log file.
+
+        args:
+            - time_interval(float): time interval in seconds between measuring device state information for writing to log file.
+
+        returns: None
+        '''
+        print('Starting file log')
+        filename_head = r'C:\Users\orens\Google Drive\Shared drives\Orenstein Lab\Data\Strain cell log files'
+        filename = f'\StrainServerLog_{time.strftime("%y%m%d_%H.%M.%S%z", time.localtime())}.dat'
+        tot_filename = filename_head + filename
+        self.filepath = LockedVar(tot_filename)
+        time_interval = self.logging_interval.locked_read()
+        current_thread = threading.current_thread()
+        with open(self.filepath.locked_read(), 'a') as f:
+            f.write(f'Strain \t Setpoint (K) \t Capacitance (pF) \t dl (um) \t Sample Length (um) \t Voltage 1 (V) \t Voltage 2 (V) \t Output 1 \t Output 2 \t P \t I \t D \t Min Voltage 1 \t Min Voltage 2 \t Max Voltage 1 \t Max Voltage 2 \t Slew Rate \t Mode \t Status \t Run \t Temperature (K) \n')
+        while current_thread.stopped() == False:
+            queues = [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q, self.temperature_q]
+            with open(self.filepath.locked_read(), 'a') as f:
+                f.write(str(datetime.datetime.now())+'\t')
+                allbutlast = ''.join(str(queue_read(logval))+'\t' for logval in queues[:-1])
+                f.write(allbutlast)
+                f.write(str(queue_read(queues[-1]))+'\n')
+            time.sleep(time_interval)
+        print('Shutting down file log thread')
 
     def set_strain(self, setpoint):
         '''
@@ -753,10 +788,15 @@ class StrainServer:
 
         # create conntrol thread
         self.strain_control_loop = StoppableThread(target=self.start_strain_control, args=(self.ctrl_mode.locked_read(),))
+        # why no self.strain_control_loop.start()? --Elizabeth
 
         # start comms
         self.comms_loop = StoppableThread(target=self.start_comms)
         self.comms_loop.start()
+
+        # write file to log data every 0.5 seconds?
+        self.filelog_loop = StoppableThread(target=self.filelog, args=(self.logging_interval.locked_read(),))
+        self.filelog_loop.start()
 
         # infinite loop display
         display = StrainDisplay(queues)
@@ -768,6 +808,10 @@ class StrainServer:
         if self.comms_loop.is_alive():
             self.comms_loop.stop()
             self.comms_loop.join()
+
+        if self.filelog_loop.is_alive():
+            self.filelog_loop.stop()
+            self.filelog_loop.join()
         print('Strain server shutdown complete')
 
 class StrainDisplay:
