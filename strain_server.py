@@ -52,7 +52,7 @@ I=100
 D=0.1
 L0 = 68.68 # initial capacitor spacing
 L0_SAMP = 68.68
-C_MEASURED_0 = 0.824 # pF, measured capacitance at 300K and 0V after a zeroing procedure.
+C_MEASURED_0 = 0.812 # pF, measured capacitance at 300K and 0V after a zeroing procedure. (Used to be 0.824)
 C_0 = 0.808 # pF, true capacitance at 300K and 0 V.
 
 ### LIMIT OUTPUT VOLTAGE HERE ###
@@ -74,7 +74,7 @@ PORT = 15200
 
 class StrainServer:
 
-    def __init__(self, lcr, ps, cryo, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, logging_interval=0.5, sim=False):
+    def __init__(self, lcr, ps, cryo, serversocket, setpoint, p, i, d, l0_samp, l0=68.68, logging_interval=1., sim=False):
         '''
         class constructor.
 
@@ -300,7 +300,7 @@ class StrainServer:
         time_interval = self.logging_interval.locked_read()
         current_thread = threading.current_thread()
         with open(self.filepath.locked_read(), 'a') as f:
-            f.write(f'Time \t Strain \t Setpoint (K) \t Capacitance (pF) \t dl (um) \t Sample Length (um) \t Voltage 1 (V) \t Voltage 2 (V) \t Output 1 \t Output 2 \t P \t I \t D \t Min Voltage 1 \t Min Voltage 2 \t Max Voltage 1 \t Max Voltage 2 \t Slew Rate \t Mode \t Status \t Run \t Temperature (K) \n')
+            f.write(f'Time\tStrain\tPID Setpoint\tCapacitance (pF)\tdl (um)\tSample Length(um)\tVoltage 1 (V)\tVoltage 2 (V)\tOutput 1\tOutput 2\tP\tI\tD\tMin Voltage 1\tMin Voltage 2\tMax Voltage 1\tMax Voltage 2\tSlew Rate\tMode\tStatus\tRun\tTemperature (K)\n')
         while current_thread.stopped() == False:
             queues = [self.strain_q, self.setpoint_q, self.cap_q, self.dl_q, self.l0_samp_q, self.voltage_1_q, self.voltage_2_q, self.output_1_q, self.output_2_q, self.p_q, self.i_q, self.d_q, self.min_voltage_1_q, self.min_voltage_2_q, self.max_voltage_1_q, self.max_voltage_2_q, self.slew_rate_q, self.ctrl_mode_q, self.ctrl_status_q, self.run_q, self.temperature_q]
             with open(self.filepath.locked_read(), 'a') as f:
