@@ -44,7 +44,7 @@ from pyqtgraph import QtCore, QtWidgets
 ##########################
 global SIM, STARTING_SETPOINT, SLEW_RATE, P, I, D, L0, MAX_VOLTAGE, MIN_VOLTAGE, HOST, PORT, LCR_ADDRESS, PS_ADDRESS
 
-SIM=False
+SIM=True
 STARTING_SETPOINT=0
 SLEW_RATE=0.5
 P=100
@@ -794,9 +794,10 @@ class StrainServer:
         self.comms_loop = StoppableThread(target=self.start_comms)
         self.comms_loop.start()
 
-        # write file to log data every 0.5 seconds?
-        self.filelog_loop = StoppableThread(target=self.filelog, args=(self.logging_interval.locked_read(),))
-        self.filelog_loop.start()
+        if self.sim.locked_read()==False:
+            # write log data to file every 1 second?
+            self.filelog_loop = StoppableThread(target=self.filelog, args=(self.logging_interval.locked_read(),))
+            self.filelog_loop.start()
 
         # infinite loop display
         display = StrainDisplay(queues)
@@ -809,9 +810,11 @@ class StrainServer:
             self.comms_loop.stop()
             self.comms_loop.join()
 
-        if self.filelog_loop.is_alive():
-            self.filelog_loop.stop()
-            self.filelog_loop.join()
+        # join file log loop if it hasn't already been stopped
+        if self.sim.locked_read()==False:
+            if self.filelog_loop.is_alive():
+                self.filelog_loop.stop()
+                self.filelog_loop.join()
         print('Strain server shutdown complete')
 
 class StrainDisplay:
